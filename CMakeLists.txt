@@ -13,9 +13,14 @@ option(NETLIB_BUILD_TESTS "Build tests" OFF)
 
 if(NETLIB_BUILD_TESTS)
     enable_testing()
+
     add_executable(test_net tests/test_net.cpp)
     target_link_libraries(test_net PRIVATE netlib)
     add_test(NAME test_net COMMAND test_net)
+
+    add_executable(test_ucontext tests/test_ucontext.cpp)
+    target_link_libraries(test_ucontext PRIVATE netlib)
+    add_test(NAME test_ucontext COMMAND test_ucontext)
 endif()
 
 if(NETLIB_BUILD_EXAMPLES)
