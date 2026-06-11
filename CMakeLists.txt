@@ -14,6 +14,7 @@ option(NETLIB_BUILD_TESTS "Build tests" OFF)
 if(NETLIB_BUILD_TESTS)
     enable_testing()
 
+    # 已有测试
     add_executable(test_net tests/test_net.cpp)
     target_link_libraries(test_net PRIVATE netlib)
     add_test(NAME test_net COMMAND test_net)
@@ -21,6 +22,11 @@ if(NETLIB_BUILD_TESTS)
     add_executable(test_ucontext tests/test_ucontext.cpp)
     target_link_libraries(test_ucontext PRIVATE netlib)
     add_test(NAME test_ucontext COMMAND test_ucontext)
+
+    # 阶段一：协程核心（按依赖顺序添加）
+    add_executable(test_log tests/test_log.cpp)
+    target_link_libraries(test_log PRIVATE netlib)
+    add_test(NAME test_log COMMAND test_log)
 endif()
 
 if(NETLIB_BUILD_EXAMPLES)
