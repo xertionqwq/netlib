@@ -23,10 +23,18 @@ if(NETLIB_BUILD_TESTS)
     target_link_libraries(test_ucontext PRIVATE netlib)
     add_test(NAME test_ucontext COMMAND test_ucontext)
 
+    add_executable(test_semaphore tests/test_semaphore.cpp)
+    target_link_libraries(test_semaphore PRIVATE netlib)
+    add_test(NAME test_semaphore COMMAND test_semaphore)
+
     # 阶段一：协程核心（按依赖顺序添加）
     add_executable(test_log tests/test_log.cpp)
     target_link_libraries(test_log PRIVATE netlib)
     add_test(NAME test_log COMMAND test_log)
+
+    add_executable(test_thread tests/test_thread.cpp)
+    target_link_libraries(test_thread PRIVATE netlib)
+    add_test(NAME test_thread COMMAND test_thread)
 endif()
 
 if(NETLIB_BUILD_EXAMPLES)
