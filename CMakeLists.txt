@@ -35,6 +35,10 @@ if(NETLIB_BUILD_TESTS)
     add_executable(test_thread tests/test_thread.cpp)
     target_link_libraries(test_thread PRIVATE netlib)
     add_test(NAME test_thread COMMAND test_thread)
+
+    add_executable(test_fiber tests/test_fiber.cpp)
+    target_link_libraries(test_fiber PRIVATE netlib)
+    add_test(NAME test_fiber COMMAND test_fiber)
 endif()
 
 if(NETLIB_BUILD_EXAMPLES)
