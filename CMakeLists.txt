@@ -39,6 +39,10 @@ if(NETLIB_BUILD_TESTS)
     add_executable(test_fiber tests/test_fiber.cpp)
     target_link_libraries(test_fiber PRIVATE netlib)
     add_test(NAME test_fiber COMMAND test_fiber)
+
+    add_executable(test_scheduler tests/test_scheduler.cpp)
+    target_link_libraries(test_scheduler PRIVATE netlib)
+    add_test(NAME test_scheduler COMMAND test_scheduler)
 endif()
 
 if(NETLIB_BUILD_EXAMPLES)

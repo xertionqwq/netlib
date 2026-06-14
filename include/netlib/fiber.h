@@ -90,7 +90,7 @@ Fiber::Fiber() {
     id_ = fiberID++; // 分配 id, 协程 id 由 0 开始
     fiberCount++;    // 活跃协程数 +1
     if (debug)
-        NETLIB_LOG_INFO << "Fiber(): main id = ";
+        NETLIB_LOG_INFO << "Fiber(): main id = " << id_;
 }
 
 // 创建新的协程 初始化回调函数, 栈大小和状态, 分配栈空间
