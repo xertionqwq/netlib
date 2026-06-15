@@ -43,6 +43,10 @@ if(NETLIB_BUILD_TESTS)
     add_executable(test_scheduler tests/test_scheduler.cpp)
     target_link_libraries(test_scheduler PRIVATE netlib)
     add_test(NAME test_scheduler COMMAND test_scheduler)
+
+    add_executable(test_timer tests/test_timer.cpp)
+    target_link_libraries(test_timer PRIVATE netlib)
+    add_test(NAME test_timer COMMAND test_timer)
 endif()
 
 if(NETLIB_BUILD_EXAMPLES)
