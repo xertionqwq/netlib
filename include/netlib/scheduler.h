@@ -257,7 +257,7 @@ void Scheduler::run() {
                 // 2-取出任务
                 assert(it->fiber_ || it->cb_);
                 task = *it;
-                tasks_.erase(it);
+                it = tasks_.erase(it);
                 activeThreadCount_++;
                 break; // 取到任务, 直接 break
             }
@@ -310,7 +310,7 @@ void Scheduler::run() {
                 break; // 退出 run 循环
             }
             // 若调度器没有调度任务, idle 协程不断进行 resume/yield
-            // 不会结束而是进入忙等
+            // 不会结束而是进入轮询等待
             // 若调度器停止了, 会进入上述的 if/else 处理任务
             idleThreadCount_++;
             idleFiber->resume();

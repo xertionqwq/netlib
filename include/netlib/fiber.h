@@ -19,11 +19,11 @@ public:
 
     // 定义协程状态
     enum class State {
-        READY,
-        RUNNING,
-        HOLD,
-        TERM,
-        EXCEPT
+        READY,   // 就绪状态
+        RUNNING, // 运行状态
+        HOLD,    // 阻塞状态
+        TERM,    // 完成状态
+        EXCEPT   // 异常状态
     };
 
 private:
@@ -187,6 +187,7 @@ uint64_t Fiber::GetFiberId() {
     return (uint64_t)-1; // 表示错误
 }
 
+// 协程入口函数, 执行回调函数且返回调度协程
 void Fiber::MainFunc() {
     auto curr = GetThis();
     assert(curr);
