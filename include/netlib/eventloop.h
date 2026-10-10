@@ -18,6 +18,7 @@ class EventLoop{
     ** Bind with C++17
     ** noncopyable
     */
+    // 禁用拷贝构造函数
     EventLoop(const EventLoop &others) = delete;
     EventLoop &operator=(const EventLoop &others) = delete;
 
@@ -48,10 +49,10 @@ public:
     void removeChannel(Channel* ch) { poller_->removeChannel(ch); }
 
 private:
-    std::thread::id threadId_;
-    std::unique_ptr<Poller> poller_;
-    std::vector<Channel *> activeChannels_;
-    int pollTimeoutMs_ = -1;
+    std::thread::id threadId_;              // 当前线程运行下的 id
+    std::unique_ptr<Poller> poller_;        // 封装的 epoll 对象
+    std::vector<Channel *> activeChannels_; // 活跃的事件
+    int pollTimeoutMs_ = -1;                // 超时时间, 默认为 1
     bool loop_ = false;
     bool quit_ = false;
 };
@@ -75,8 +76,10 @@ inline void EventLoop::loop() {
     loop_ = true;
     while (!quit_) {
         activeChannels_.clear();
+        // 等待就绪事件
         int numEvents = poller_->poll(pollTimeoutMs_, activeChannels_);
         if (numEvents > 0) {
+            // 事件就绪, 处理事件回调, 也就是业务
             for (size_t i = 0; i < activeChannels_.size(); i++) {
                 activeChannels_[i]->handleEvent();
             }

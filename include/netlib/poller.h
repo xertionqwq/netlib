@@ -50,12 +50,14 @@ public:
 
     // changes the interested I/O events
     // must be called in one loop thread
+    // 持有 channel 裸指针, 不拥有所有权
     void updateChannel(Channel *channel);
     void removeChannel(Channel *channel);
 
     void assertInLoopThread();
 
 private:
+    // 返回就绪 channel 
     void fillActiveChannels(int numEvents,
                             ChannelList &activeChannels) const;
 

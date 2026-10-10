@@ -106,16 +106,16 @@ private:
 
     // variable
     EventLoop *loop_;
-    StateE state_;
+    StateE state_; // 当前连接的状态
 
     int fd_;
-    std::unique_ptr<Channel> channel_;
-    InetAddress localAddr_;
+    std::unique_ptr<Channel> channel_; // 掌管连接的 fd
+    InetAddress localAddr_;            // 连接使用的地址
 
-    // the Buffer
+    // the Buffer, 读写缓冲区
     Buffer inputBuf_;
     Buffer outputBuf_;
-    // Callback
+    // Callback, 设置的回调函数
     ConnectionCallback connectionCallback_;
     MessageCallback messageCallback_;
     CloseCallback closeCallback_;
@@ -171,6 +171,7 @@ inline void TcpConnection::handleClose() {
     channel_->disableAll();
     close(fd_);
     setState(StateE::kDisconnected);
+    // 如果有关闭回调, 则执行
     if (closeCallback_)
         closeCallback_(shared_from_this());
 }

@@ -74,12 +74,13 @@ public:
     }
 
     // for Poller(pollpoller, not epollpoller)
+    // 为 poll 准备的轮询检查函数
     int index() { return index_; }
     void set_index(int idx) { index_ = idx; }
     void remove();
 
 private:
-    void update(); // to matain the fds
+    void update(); // 更新自己在 epoll 里的状态
     // set the epoll mod
     static const int kNoneEvent;
     static const int kReadEvent;
