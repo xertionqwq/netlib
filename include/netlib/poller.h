@@ -11,12 +11,13 @@
 #include <unordered_map>
 
 #include "channel.h"
+#include "netlib/noncopyable.h"
 
 namespace netlib
 {
 class EventLoop;
 
-class Poller
+class Poller : private Noncopyable
 {
 
     /*
@@ -28,10 +29,6 @@ class Poller
     ** Encapsulation of events
     ** noncopyable
     */
-
-    // delete construct/assign copy
-    Poller(const Poller &others) = delete;
-    Poller &operator=(const Poller &others) = delete;
 
 public:
     // using alias

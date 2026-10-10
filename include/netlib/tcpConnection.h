@@ -12,9 +12,11 @@
 #include "netlib/eventloop.h"
 #include "netlib/inetAddress.h"
 #include "netlib/buffer.h"
+#include "netlib/noncopyable.h"
 
 namespace netlib{
-class TcpConnection : public std::enable_shared_from_this<TcpConnection> {
+class TcpConnection : private Noncopyable,
+                      public std::enable_shared_from_this<TcpConnection> {
 
 public:
     // using alias

@@ -7,10 +7,12 @@
 #include <functional>
 #include <memory>
 
+#include "netlib/noncopyable.h"
+
 namespace netlib{
 class EventLoop; // predeclaration
 
-class Channel{
+class Channel : private Noncopyable{
 
     /*
     ** A selectable I/O channel
@@ -19,10 +21,6 @@ class Channel{
     ** noncopyable
     ** Bitwise: |= set, &= ~ unset, == check, & test
     */
-    // delete construct/assign copy
-    Channel(const Channel &others) = delete;
-    Channel& operator=(const Channel &others) = delete;
-
 public:
     // using alias
     using EventCallBack = std::function<void()>;

@@ -8,17 +8,15 @@
 
 #include "netlib/inetAddress.h"
 #include "netlib/eventloop.h"
+#include "netlib/noncopyable.h"
 
 namespace netlib{
 
-class Acceptor{
+class Acceptor : private Noncopyable{
     /*
     ** own acceptFd, to accept new fd, pass to TcpConnection
     ** noncopyable
     */
-
-    Acceptor(const Acceptor &others) = delete;
-    Acceptor &operator=(const Acceptor &others) = delete;
 
 public:
     // using alias

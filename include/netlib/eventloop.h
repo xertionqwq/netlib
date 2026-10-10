@@ -8,20 +8,17 @@
 
 #include "netlib/poller.h"
 #include "netlib/channel.h"
+#include "netlib/noncopyable.h"
 
 namespace netlib{
 
-class EventLoop{
+class EventLoop : private Noncopyable{
 
     /*
     ** ask for activeChannels, use it's eventCallback
     ** Bind with C++17
     ** noncopyable
     */
-    // 禁用拷贝构造函数
-    EventLoop(const EventLoop &others) = delete;
-    EventLoop &operator=(const EventLoop &others) = delete;
-
 public:
     void assertInLoopThread() const {
         assert(threadId_ == std::this_thread::get_id());
