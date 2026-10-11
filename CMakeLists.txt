@@ -32,6 +32,13 @@ if(NETLIB_BUILD_TESTS)
     target_link_libraries(test_log PRIVATE netlib)
     add_test(NAME test_log COMMAND test_log)
 
+    # 同一套日志测试在禁用标准 assert 时仍须验证 FATAL 和项目断言
+    add_executable(test_log_ndebug tests/test_log.cpp)
+    target_link_libraries(test_log_ndebug PRIVATE netlib)
+    target_compile_definitions(test_log_ndebug PRIVATE NDEBUG)
+    add_test(NAME test_log_ndebug COMMAND test_log_ndebug)
+    set_tests_properties(test_log test_log_ndebug PROPERTIES TIMEOUT 30)
+
     add_executable(test_thread tests/test_thread.cpp)
     target_link_libraries(test_thread PRIVATE netlib)
     add_test(NAME test_thread COMMAND test_thread)

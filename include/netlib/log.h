@@ -2,19 +2,29 @@
 #define NETLIB_LOG_H
 
 #include <cassert>
+#include <atomic>
+#include <cerrno>
 #include <cstdio>
-#include <ctime>
+#include <cstdlib>
 #include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
+
+#include "netlib/timestamp.h"
 
 namespace netlib {
 
 // ============================================================
 // Log 级别
 // ============================================================
-enum class LogLevel { DEBUG = 0, INFO = 1, WARN = 2, ERROR = 3, FATAL = 4 };
+enum class LogLevel {
+    DEBUG = 0, // 调试信息
+    INFO = 1,  // 普通信息
+    WARN = 2,  // 警告信息
+    ERROR = 3, // 错误信息
+    FATAL = 4  // core信息
+};
 
 // ============================================================
 // Logger — 流式日志，析构时一次性写入 stderr（线程安全）
@@ -25,37 +35,52 @@ public:
         : level_(level), file_(file), line_(line) {}
 
     ~Logger() {
-        if (level_ < getLevel()) return;
+        // 宏入口已经决定输出, 不再根据变化后的门槛重新过滤
         sink();
+        if (level_ == LogLevel::FATAL) {
+            std::fflush(stderr);
+            std::abort();
+        }
     }
 
+    // 返回流式对象, << msg 接入字符串
     std::ostream& stream() { return os_; }
 
-    static void setLevel(LogLevel lv) { getLevel() = lv; }
-    static LogLevel& getLevel() {
-        static LogLevel s_level = LogLevel::DEBUG;
-        return s_level;
+    // 设置日志级别
+    static void setLevel(LogLevel lv) {
+        minLevel_.store(lv, std::memory_order_relaxed);
+    }
+    // 查看日志级别
+    static LogLevel getLevel() {
+        return minLevel_.load(std::memory_order_relaxed);
+    }
+
+    static bool shouldLog(LogLevel lv) {
+        return lv == LogLevel::FATAL || lv >= getLevel();
     }
 
 private:
+    // 整条日志格式化输出
     void sink() {
         static std::mutex s_mutex;
         std::lock_guard<std::mutex> lock(s_mutex);
 
-        // 时间戳
-        auto now = std::time(nullptr);
-        char timeBuf[32];
-        std::strftime(timeBuf, sizeof(timeBuf), "%H:%M:%S", std::localtime(&now));
+        // 得到时间字符串
+        const std::string timeText = timestamp_.toString();
 
-        // 颜色（仅 ERROR/FATAL 红色，WARN 黄色）
+        std::ostringstream threadId;
+        threadId << threadId_;
+
+        // 颜色（ERROR 红色，FATAL 紫色，WARN 黄色）
         const char* color = "";
         const char* reset = "";
         if (level_ >= LogLevel::FATAL) { color = "\033[35m"; reset = "\033[0m"; }
         else if (level_ >= LogLevel::ERROR) { color = "\033[31m"; reset = "\033[0m"; }
         else if (level_ >= LogLevel::WARN)  { color = "\033[33m"; reset = "\033[0m"; }
 
-        std::fprintf(stderr, "%s%s [%s] %s:%d %s%s\n",
-                     color, levelStr(level_), timeBuf,
+        std::fprintf(stderr, "%s%s [%s] [tid=%s] %s:%d %s%s\n",
+                     color, levelStr(level_), timeText.c_str(),
+                     threadId.str().c_str(),
                      basename(file_), line_,
                      os_.str().c_str(), reset);
     }
@@ -78,29 +103,49 @@ private:
         return "?????";
     }
 
-    LogLevel level_;
-    const char* file_;
+    struct ErrnoGuard {
+        int savedErrno = errno;
+        ~ErrnoGuard() { errno = savedErrno; }
+    };
+
+    // 最先构造、最后析构, 保留整条日志表达式执行前的 errno
+    ErrnoGuard errnoGuard_;
+    inline static std::atomic<LogLevel> minLevel_{LogLevel::DEBUG};
+
+    Timestamp timestamp_ = Timestamp::now(); // 记录日志对象创建时的时间
+    LogLevel level_;        // 日志等级
+    const char* file_;      // 源文件
     int line_;
-    std::ostringstream os_;
+    std::thread::id threadId_ = std::this_thread::get_id();
+    std::ostringstream os_; // 日志缓冲区
 };
 
 // ============================================================
 // 日志宏
 // ============================================================
-#define NETLIB_LOG_DEBUG netlib::Logger(netlib::LogLevel::DEBUG, __FILE__, __LINE__).stream()
-#define NETLIB_LOG_INFO  netlib::Logger(netlib::LogLevel::INFO,  __FILE__, __LINE__).stream()
-#define NETLIB_LOG_WARN  netlib::Logger(netlib::LogLevel::WARN,  __FILE__, __LINE__).stream()
-#define NETLIB_LOG_ERROR netlib::Logger(netlib::LogLevel::ERROR, __FILE__, __LINE__).stream()
+// 完整的 if/else 防止宏与调用处的 else 错误绑定
+#define NETLIB_LOG_DEBUG                                           \
+    if (!netlib::Logger::shouldLog(netlib::LogLevel::DEBUG)) {}      \
+    else netlib::Logger(netlib::LogLevel::DEBUG, __FILE__, __LINE__).stream()
+#define NETLIB_LOG_INFO                                            \
+    if (!netlib::Logger::shouldLog(netlib::LogLevel::INFO)) {}       \
+    else netlib::Logger(netlib::LogLevel::INFO, __FILE__, __LINE__).stream()
+#define NETLIB_LOG_WARN                                            \
+    if (!netlib::Logger::shouldLog(netlib::LogLevel::WARN)) {}       \
+    else netlib::Logger(netlib::LogLevel::WARN, __FILE__, __LINE__).stream()
+#define NETLIB_LOG_ERROR                                           \
+    if (!netlib::Logger::shouldLog(netlib::LogLevel::ERROR)) {}      \
+    else netlib::Logger(netlib::LogLevel::ERROR, __FILE__, __LINE__).stream()
+// FATAL 始终输出, 刷新后终止程序
 #define NETLIB_LOG_FATAL netlib::Logger(netlib::LogLevel::FATAL, __FILE__, __LINE__).stream()
 
 // ============================================================
-// 断言宏
+// 断言宏 — 始终生效, 不受 NDEBUG 影响, 条件只求值一次
 // ============================================================
 #define NETLIB_ASSERT(cond)                                   \
     do {                                                      \
         if (!(cond)) {                                        \
             NETLIB_LOG_FATAL << "assertion failed: " #cond;   \
-            assert(cond);                                     \
         }                                                     \
     } while (0)
 
