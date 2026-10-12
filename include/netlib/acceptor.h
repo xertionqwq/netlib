@@ -69,13 +69,15 @@ inline Acceptor::Acceptor(EventLoop *loop, const InetAddress &listenAddr) :
     // 为监听 fd 创建 Channel 
     acceptChannel_ = std::make_unique<Channel>(loop, acceptFd_);
     // 设置读回调为新建连接 fd
-    acceptChannel_->setReadCallback([this]()
+    acceptChannel_->setReadCallback([this](Timestamp)
                                     { handleRead(); });
     acceptChannel_->enableReading(); // 向 epoll 注册读事件
 }
 
 inline Acceptor::~Acceptor() {
     loop_->assertInLoopThread();
+    acceptChannel_->disableAll();
+    acceptChannel_->remove();
     close(acceptFd_);
 }
 

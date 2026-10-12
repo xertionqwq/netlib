@@ -9,6 +9,8 @@
 #include <iostream>
 #include <vector>
 #include <unordered_map>
+#include <system_error>
+#include <stdexcept>
 
 #include "channel.h"
 #include "netlib/noncopyable.h"
@@ -50,10 +52,20 @@ public:
     // 持有 channel 裸指针, 不拥有所有权
     void updateChannel(Channel *channel);
     void removeChannel(Channel *channel);
+    bool hasChannel(const Channel *channel) const {
+        auto it = channels_.find(channel->fd());
+        return it != channels_.end() && it->second == channel;
+    }
 
     void assertInLoopThread();
 
 private:
+    void update(int operation, Channel *channel);
+
+    static constexpr int kNew = -1;    // 未由 Poller 管理
+    static constexpr int kAdded = 1;   // 由 Poller 管理，且已注册 epoll
+    static constexpr int kDeleted = 2; // 由 Poller 管理，已暂停 epoll 监听
+
     // 返回就绪 channel 
     void fillActiveChannels(int numEvents,
                             ChannelList &activeChannels) const;
@@ -103,50 +115,72 @@ inline void Poller::fillActiveChannels(int numEvents, ChannelList &activeChannel
 
 // function to update pollfds
 inline void Poller::updateChannel(Channel *channel) {
-    // assertInLoopThread();
+    assertInLoopThread();
+    assert(channel->ownerLoop() == ownerLoop_);
+    const int index = channel->index();
 
-    struct epoll_event ev;
-    ev.events = channel->events();
-    ev.data.ptr = channel;
-    auto check = channels_.find(channel->fd());
+    if (index == kNew) {
+        if (channel->isNoneEvent())
+            return;
 
-    if (channel->isNoneEvent()) {
-        // cur ch don't care about anything
-        if (check != channels_.end())
-            removeChannel(channel);
+        auto inserted = channels_.emplace(channel->fd(), channel);
+        if (!inserted.second)
+            throw std::logic_error("Channel fd is already managed by this Poller");
+        try {
+            update(EPOLL_CTL_ADD, channel);
+        } catch (...) {
+            channels_.erase(inserted.first);
+            throw;
+        }
+        channel->set_index(kAdded);
+        channel->addedToLoop_ = true;
         return;
     }
 
-    if (check == channels_.end()) { // new one, add
-        int ret = ::epoll_ctl(epfd_, EPOLL_CTL_ADD,
-                            channel->fd(), &ev);
-        if (ret == -1) {
-            std::cerr << "add channel error" << std::endl;
-        } else {
-            channels_[channel->fd()] = channel; // link
+    assert(hasChannel(channel));
+    assert(channel->addedToLoop_);
+    if (index == kDeleted) {
+        if (!channel->isNoneEvent()) {
+            update(EPOLL_CTL_ADD, channel);
+            channel->set_index(kAdded);
         }
-    } else { // old one, mod
-        assert(channels_[channel->fd()]== channel); // to ensure is self
-        int ret = ::epoll_ctl(epfd_, EPOLL_CTL_MOD,
-                            channel->fd(), &ev);
-        if (ret == -1) {
-            std::cerr << "mod channel error" << std::endl;
-            assert(ret == 0);
-            removeChannel(channel);
-        } 
+    } else {
+        assert(index == kAdded);
+        if (channel->isNoneEvent()) {
+            update(EPOLL_CTL_DEL, channel);
+            channel->set_index(kDeleted);
+        } else {
+            update(EPOLL_CTL_MOD, channel);
+        }
     }
 }
 
 // function to remove channels
 inline void Poller::removeChannel(Channel *channel) {
     assertInLoopThread();
-    // avoid remove twice
-    assert(channels_.find(channel->fd()) != channels_.end());
-    assert(channels_[channel->fd()] == channel);
+    assert(channel->ownerLoop() == ownerLoop_);
     assert(channel->isNoneEvent());
-    ::epoll_ctl(epfd_, EPOLL_CTL_DEL,
-                channel->fd(), nullptr);
-    channels_.erase(channel->fd());
+    const int index = channel->index();
+    auto it = channels_.find(channel->fd());
+    if (index == kNew) {
+        assert(!channel->addedToLoop_);
+        return;
+    }
+    assert(it != channels_.end() && it->second == channel);
+    assert(index == kAdded || index == kDeleted);
+    if (index == kAdded)
+        update(EPOLL_CTL_DEL, channel);
+    channels_.erase(it);
+    channel->set_index(kNew);
+    channel->addedToLoop_ = false;
+}
+
+inline void Poller::update(int operation, Channel *channel) {
+    epoll_event event{};
+    event.events = channel->events();
+    event.data.ptr = channel;
+    if (::epoll_ctl(epfd_, operation, channel->fd(), &event) < 0)
+        throw std::system_error(errno, std::generic_category(), "epoll_ctl");
 }
 };
 

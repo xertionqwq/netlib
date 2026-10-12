@@ -19,6 +19,16 @@ if(NETLIB_BUILD_TESTS)
     target_link_libraries(test_net PRIVATE netlib)
     add_test(NAME test_net COMMAND test_net)
 
+    add_executable(test_channel tests/test_channel.cpp tests/test_channel_peer.cpp)
+    target_link_libraries(test_channel PRIVATE netlib)
+    add_test(NAME test_channel COMMAND test_channel)
+
+    add_executable(test_channel_ndebug tests/test_channel.cpp tests/test_channel_peer.cpp)
+    target_link_libraries(test_channel_ndebug PRIVATE netlib)
+    target_compile_definitions(test_channel_ndebug PRIVATE NDEBUG)
+    add_test(NAME test_channel_ndebug COMMAND test_channel_ndebug)
+    set_tests_properties(test_channel test_channel_ndebug PROPERTIES TIMEOUT 30)
+
     add_executable(test_ucontext tests/test_ucontext.cpp)
     target_link_libraries(test_ucontext PRIVATE netlib)
     add_test(NAME test_ucontext COMMAND test_ucontext)

@@ -29,7 +29,7 @@ public:
         loop_(loop), state_(StateE::kConnecting), fd_(fd), 
         channel_(std::make_unique<Channel>(loop, fd)), 
         localAddr_(port) {
-        channel_->setReadCallback([this]()
+        channel_->setReadCallback([this](Timestamp)
                                   { handleRead(); });
         channel_->setWriteCallback([this]()
                                    { handleWrite(); });
@@ -39,8 +39,10 @@ public:
                                    { handleError(); });
     }
     ~TcpConnection() {
+        channel_->disableAll();
         channel_->remove();
-        close(fd_);
+        if (fd_ >= 0)
+            close(fd_);
     }
 
     // the setter
@@ -168,10 +170,14 @@ inline void TcpConnection::handleWrite() {
 
 inline void TcpConnection::handleClose() {
     loop_->assertInLoopThread();
+    if (state_ == StateE::kDisconnected)
+        return;
     std::cout << "TcpConnection::handleClose state =  "<< enumToStr() << std::endl;
     // assert(state_ == StateE::kConnected);
     channel_->disableAll();
+    channel_->remove();
     close(fd_);
+    fd_ = -1;
     setState(StateE::kDisconnected);
     // 如果有关闭回调, 则执行
     if (closeCallback_)
@@ -185,11 +191,12 @@ inline void TcpConnection::handleError() {
 
 inline void TcpConnection::connectDestroyed() {
     loop_->assertInLoopThread();
-    assert(state_ == StateE::kConnected);
-    setState(StateE::kDisconnected);
-    channel_->disableAll();
-    if (connectionCallback_)
-        connectionCallback_(shared_from_this());
+    if (state_ == StateE::kConnected || state_ == StateE::kDisconnecting) {
+        setState(StateE::kDisconnected);
+        channel_->disableAll();
+        if (connectionCallback_)
+            connectionCallback_(shared_from_this());
+    }
     channel_->remove();
 }
 

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
 
 #include "netlib/eventloop.h"
 #include "netlib/channel.h"
@@ -11,6 +12,37 @@
 #include "netlib/tcpConnection.h"
 
 using namespace netlib;
+
+void test_inet_address() {
+    InetAddress listenAddr(8080);
+    assert(listenAddr.ip() == "0.0.0.0");
+    assert(listenAddr.port() == 8080);
+    assert(listenAddr.toIpPort() == "0.0.0.0:8080");
+    assert(listenAddr.addr().sin_family == AF_INET);
+    assert(listenAddr.size() == sizeof(sockaddr_in));
+
+    InetAddress loopback("127.0.0.1", 65535);
+    assert(loopback.ip() == "127.0.0.1");
+    assert(loopback.port() == 65535);
+    assert(loopback.toIpPort() == "127.0.0.1:65535");
+
+    InetAddress broadcast("255.255.255.255", 0);
+    assert(broadcast.ip() == "255.255.255.255");
+    assert(broadcast.toIpPort() == "255.255.255.255:0");
+}
+
+void test_inet_address_invalid_ip() {
+    const char* invalidIps[] = {"", "localhost", "256.0.0.1", "127.0.0", "::1"};
+    for (const char* ip : invalidIps) {
+        bool rejected = false;
+        try {
+            InetAddress addr(ip, 8080);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        assert(rejected && "invalid IPv4 address should be rejected");
+    }
+}
 
 void test_channel_read() {
     int fds[2];
@@ -21,7 +53,7 @@ void test_channel_read() {
     Channel ch(&loop, fds[0]);
 
     bool called = false;
-    ch.setReadCallback([&]() {
+    ch.setReadCallback([&](Timestamp) {
         char buf[16];
         ::recv(fds[0], buf, sizeof(buf), 0);
         called = true;
@@ -32,6 +64,8 @@ void test_channel_read() {
     ::write(fds[1], "x", 1);
     loop.loop();  // 事件到达 → 回调 → quit → loop 返回
 
+    ch.disableAll();
+    ch.remove();
     ::close(fds[0]);
     ::close(fds[1]);
     assert(called && "read callback should have fired");
@@ -55,6 +89,8 @@ void test_channel_write() {
 
     loop.loop();
 
+    ch.disableAll();
+    ch.remove();
     ::close(fds[0]);
     ::close(fds[1]);
     assert(called && "write callback should have fired");
@@ -105,17 +141,23 @@ void test_tcp_connection_write() {
 }
 
 int main() {
+    test_inet_address();
+    std::cout << "[1/6] test_inet_address passed" << std::endl;
+
+    test_inet_address_invalid_ip();
+    std::cout << "[2/6] test_inet_address_invalid_ip passed" << std::endl;
+
     test_channel_read();
-    std::cout << "[1/4] test_channel_read passed" << std::endl;
+    std::cout << "[3/6] test_channel_read passed" << std::endl;
 
     test_channel_write();
-    std::cout << "[2/4] test_channel_write passed" << std::endl;
+    std::cout << "[4/6] test_channel_write passed" << std::endl;
 
     test_tcp_connection_read();
-    std::cout << "[3/4] test_tcp_read passed" << std::endl;
+    std::cout << "[5/6] test_tcp_read passed" << std::endl;
 
     test_tcp_connection_write();
-    std::cout << "[4/4] test_tcp_write passed" << std::endl;
+    std::cout << "[6/6] test_tcp_write passed" << std::endl;
 
     std::cout << "test_net: all passed" << std::endl;
     return 0;

@@ -15,7 +15,7 @@ namespace netlib{
 class EventLoop : private Noncopyable{
 
     /*
-    ** ask for activeChannels, use it's eventCallback
+    ** 事件循环类, 主要包含两个大模块 Channel Poller
     ** Bind with C++17
     ** noncopyable
     */
@@ -44,6 +44,7 @@ public:
     // forward to Poller
     void updateChannel(Channel* ch) { poller_->updateChannel(ch); }
     void removeChannel(Channel* ch) { poller_->removeChannel(ch); }
+    bool hasChannel(const Channel* ch) const { return poller_->hasChannel(ch); }
 
 private:
     std::thread::id threadId_;              // 当前线程运行下的 id
@@ -54,14 +55,14 @@ private:
     bool quit_ = false;
 };
 
-EventLoop::EventLoop() : threadId_(std::this_thread::get_id()),
+inline EventLoop::EventLoop() : threadId_(std::this_thread::get_id()),
                          poller_(std::make_unique<Poller>(this)) {}
-EventLoop::EventLoop(int timeWaitMs) : threadId_(std::this_thread::get_id()),
+inline EventLoop::EventLoop(int timeWaitMs) : threadId_(std::this_thread::get_id()),
                          poller_(std::make_unique<Poller>(this)) {
     assert(timeWaitMs >= 0 || timeWaitMs == -1);
     pollTimeoutMs_ = timeWaitMs;
 }
-EventLoop::~EventLoop() {
+inline EventLoop::~EventLoop() {
     assert(loop_ == false); // is time to quit
     quit_ = true;
 }
@@ -76,9 +77,10 @@ inline void EventLoop::loop() {
         // 等待就绪事件
         int numEvents = poller_->poll(pollTimeoutMs_, activeChannels_);
         if (numEvents > 0) {
+            const Timestamp receiveTime = Timestamp::now();
             // 事件就绪, 处理事件回调, 也就是业务
             for (size_t i = 0; i < activeChannels_.size(); i++) {
-                activeChannels_[i]->handleEvent();
+                activeChannels_[i]->handleEvent(receiveTime);
             }
         } else if (numEvents == 0) {
             continue;
@@ -93,11 +95,17 @@ inline void EventLoop::loop() {
 }
 
 // Channel 的方法需要 EventLoop 完整定义
+/*
+** 当 channel 改变 fd 的 events 事件后
+** 负责更改 poller 中对应 fd 的事件
+*/
 inline void Channel::update() {
     loop_->updateChannel(this);
 }
+// 在 channel 所属的 loop 中, 从 poller 将当前的 channel 移除
 inline void Channel::remove() {
-    disableAll();  // update() 内调 Poller::updateChannel → isNoneEvent → removeChannel
+    assert(isNoneEvent()); // 确实无事可做了
+    loop_->removeChannel(this);
 }
 
 inline void Poller::assertInLoopThread() {
