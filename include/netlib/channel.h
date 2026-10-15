@@ -144,18 +144,20 @@ inline void Channel::handleEventWithGuard(Timestamp receiveTime) {
     NETLIB_LOG_INFO << "channel handEvent revents: " << revents_;
 
     eventHandling_ = true;
+    struct HandlingGuard {
+        bool& handling;
+        ~HandlingGuard() { handling = false; }
+    } guard{eventHandling_};
     // HUP 伴随可读事件时，先消费剩余数据；RDHUP 交给读回调处理 EOF
     if ((revents_ & EPOLLHUP) && !(revents_ & EPOLLIN)) {
         if (closeCallback_)
             closeCallback_();
-        eventHandling_ = false;
         return;
     } // time to close
     if (revents_ & EPOLLERR) {
         if (errorCallback_)
             errorCallback_();
         if (isNoneEvent()) {
-            eventHandling_ = false;
             return;
         }
     } // something error
@@ -163,7 +165,6 @@ inline void Channel::handleEventWithGuard(Timestamp receiveTime) {
         if (readCallback_)
             readCallback_(receiveTime);
         if (isNoneEvent()) {
-            eventHandling_ = false;
             return;
         }
     } // time to read
@@ -171,7 +172,6 @@ inline void Channel::handleEventWithGuard(Timestamp receiveTime) {
         if (writeCallback_)
             writeCallback_();
     } // time to write
-    eventHandling_ = false;
 }
 // core function
 inline void Channel::handleEvent(Timestamp receiveTime) {

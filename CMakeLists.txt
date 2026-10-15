@@ -29,6 +29,16 @@ if(NETLIB_BUILD_TESTS)
     add_test(NAME test_channel_ndebug COMMAND test_channel_ndebug)
     set_tests_properties(test_channel test_channel_ndebug PROPERTIES TIMEOUT 30)
 
+    # EventLoop 独立测试使用 tests/support 的 poll(2) 后端，避免依赖待实现的 EPollPoller::poll。
+    foreach(eventloop_target IN ITEMS test_eventloop test_eventloop_ndebug)
+        add_executable(${eventloop_target} tests/test_eventloop.cpp tests/test_eventloop_peer.cpp)
+        target_include_directories(${eventloop_target} BEFORE PRIVATE tests/support)
+        target_link_libraries(${eventloop_target} PRIVATE netlib)
+        add_test(NAME ${eventloop_target} COMMAND ${eventloop_target})
+        set_tests_properties(${eventloop_target} PROPERTIES TIMEOUT 15)
+    endforeach()
+    target_compile_definitions(test_eventloop_ndebug PRIVATE NDEBUG)
+
     add_executable(test_ucontext tests/test_ucontext.cpp)
     target_link_libraries(test_ucontext PRIVATE netlib)
     add_test(NAME test_ucontext COMMAND test_ucontext)

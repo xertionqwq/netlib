@@ -2,9 +2,15 @@
 #define NETLIB_ACCEPTOR_H
 
 #include <arpa/inet.h>
+#include <unistd.h>
+#include <cassert>
+#include <cerrno>
 #include <fcntl.h>
 #include <cstring>
 #include <functional>
+#include <iostream>
+#include <memory>
+#include <utility>
 
 #include "netlib/inetAddress.h"
 #include "netlib/eventloop.h"

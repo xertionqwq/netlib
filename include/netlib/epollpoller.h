@@ -65,7 +65,8 @@ inline void EPollPoller::updateChannel(Channel *channel) {
     assertInLoopThread();
     assert(channel->ownerLoop() == ownerLoop());
     const int index = channel->index();
-    NETLIB_LOG_INFO << "updateChannel fd=" << channel->fd()
+    NETLIB_LOG_INFO << "func = " << __FUNCTION__
+                    << " updateChannel fd=" << channel->fd()
                     << " events=" << channel->events()
                     << " index=" << indexToString(index) << '(' << index << ')';
 
@@ -110,7 +111,8 @@ inline void EPollPoller::removeChannel(Channel *channel) {
     assert(channel->ownerLoop() == ownerLoop());
     assert(channel->isNoneEvent());
     const int index = channel->index();
-    NETLIB_LOG_INFO << "removeChannel fd=" << channel->fd()
+    NETLIB_LOG_INFO << "func = " << __FUNCTION__
+                    << " removeChannel fd=" << channel->fd()
                     << " index=" << indexToString(index) << '(' << index << ')';
 
     // 未注册或已移除时无需操作，避免误删同一 fd 的其他 Channel
