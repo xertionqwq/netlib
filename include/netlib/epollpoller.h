@@ -39,7 +39,6 @@ private:
     static constexpr int kAdded = 1;   // 由 Poller 管理，且已注册 epoll
     static constexpr int kDeleted = 2; // 由 Poller 管理，已暂停 epoll 监听
 
-    static constexpr int kMaxEvents = 128;
     static constexpr int kInitEventListsSize = 16;
 
     using EventList = std::vector<epoll_event>;
@@ -59,6 +58,47 @@ inline EPollPoller::EPollPoller(EventLoop *loop) :
 
 inline EPollPoller::~EPollPoller() {
     ::close(epfd_);
+}
+
+inline Timestamp EPollPoller::poll(int timeoutMs, ChannelList &activeChannels) {
+    assertInLoopThread();
+    // 由于调用频繁, 使用 DEBUG 打印更合理, 这里使用 INFO 便于观察
+    NETLIB_LOG_INFO << "func = " << __FUNCTION__
+                    << " fd total count: " << channels_.size() << '\n';
+
+    const int numEvents = ::epoll_wait(epfd_, events_.data(),
+                                       static_cast<int>(events_.size()), timeoutMs);
+    const int savedErrno = errno; // 时间获取和日志输出前保存系统调用的错误码
+    const Timestamp receiveTime(Timestamp::now());
+
+    if (numEvents > 0) { // 有事件发生
+        NETLIB_LOG_INFO << "epoll_wait ready count=" << numEvents << '\n';
+        fillActiveChannels(numEvents, activeChannels);
+        // 本批事件收集完成后，再为下一轮扩大缓冲区
+        if (static_cast<size_t>(numEvents) == events_.size())
+            events_.resize(events_.size() * 2);
+    } else if (numEvents == 0) { // 无事件发生
+        NETLIB_LOG_DEBUG << "nothing happend, epoll_wait timeout=" << timeoutMs << '\n';
+    } else if (savedErrno != EINTR) { // EINTR 代表错误由其他的中断发生
+        std::system_error error(
+            savedErrno, std::generic_category(),
+            "epoll_wait epfd=" + std::to_string(epfd_) +
+                " timeoutMs=" + std::to_string(timeoutMs));
+        NETLIB_LOG_ERROR << error.what() << " errno=" << savedErrno << '\n';
+        throw error;
+    }
+    // 超时和 EINTR 都返回本轮时间，让 EventLoop 继续检查退出和待办任务
+    return receiveTime;
+}
+
+inline void EPollPoller::fillActiveChannels(int numEvents, ChannelList &activeChannels) const {
+    assert(numEvents >= 0 && static_cast<size_t>(numEvents) <= events_.size());
+    for (int i = 0; i < numEvents; ++i) {
+        Channel *channel = static_cast<Channel *>(events_[i].data.ptr);
+        assert(channel != nullptr && hasChannel(channel));
+        channel->set_revents(events_[i].events);
+        activeChannels.push_back(channel);
+    }
 }
 
 inline void EPollPoller::updateChannel(Channel *channel) {

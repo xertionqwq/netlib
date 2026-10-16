@@ -29,7 +29,17 @@ if(NETLIB_BUILD_TESTS)
     add_test(NAME test_channel_ndebug COMMAND test_channel_ndebug)
     set_tests_properties(test_channel test_channel_ndebug PROPERTIES TIMEOUT 30)
 
-    # EventLoop 独立测试使用 tests/support 的 poll(2) 后端，避免依赖待实现的 EPollPoller::poll。
+    # EPollPoller 使用真实后端，只对 epoll_wait 的异常路径进行一次性故障注入。
+    foreach(poller_target IN ITEMS test_epollpoller test_epollpoller_ndebug)
+        add_executable(${poller_target} tests/test_epollpoller.cpp)
+        target_link_libraries(${poller_target} PRIVATE netlib)
+        target_link_options(${poller_target} PRIVATE "-Wl,--wrap=epoll_wait")
+        add_test(NAME ${poller_target} COMMAND ${poller_target})
+        set_tests_properties(${poller_target} PROPERTIES TIMEOUT 15)
+    endforeach()
+    target_compile_definitions(test_epollpoller_ndebug PRIVATE NDEBUG)
+
+    # EventLoop 独立测试使用 tests/support 的 poll(2) 后端进行故障注入。
     foreach(eventloop_target IN ITEMS test_eventloop test_eventloop_ndebug)
         add_executable(${eventloop_target} tests/test_eventloop.cpp tests/test_eventloop_peer.cpp)
         target_include_directories(${eventloop_target} BEFORE PRIVATE tests/support)
