@@ -4,12 +4,18 @@
 #include <condition_variable>
 #include <string>
 #include <mutex>
+#include <atomic>
 #include <thread>
 #include <functional>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <cstdio>
+#include <stdexcept>
+#include <utility>
 
-#include "log.h"
+#include "netlib/noncopyable.h"
+#include "netlib/currentThread.h"
+#include "netlib/log.h"
 
 namespace netlib {
 
@@ -42,14 +48,14 @@ private:
     int count_;
 };
 
-class Thread {
+class Thread : private Noncopyable {
     /*
     ** 包装自实现线程
     */
 public:
     using FunCallback = std::function<void()>;
 
-    Thread(FunCallback cb, const std::string &name);
+    explicit Thread(FunCallback cb, const std::string &name = std::string());
     ~Thread();
 
     pid_t getId() const { return id_; }
@@ -60,7 +66,7 @@ public:
 public:
     // 获取系统分配的线程 id
     static pid_t GetThreadId() {
-        return syscall(SYS_gettid);
+        return CurrentThread::tid();
     }
     // 获取当前所在线程
     static Thread *GetThis();   
@@ -69,20 +75,37 @@ public:
     static const std::string &GetName();
     // 设置当前线程名字
     static void SetName(const std::string &name);
+    // 获取当前创建的线程数
+    static int numCreated() { return numCreated_; }
 
 private:
-    pid_t id_ = -1;      // 进程 id
-    std::thread thread_; // 线程, 不可拷贝
-    FunCallback cb_;     // 线程需要运行的函数
-    std::string name_;   // 线程名
-    Semaphore sem_;      // 引入信号量完成线程同步创建
+    // 设置线程默认名称
+    void setDefaultName();
+
+private:
+    pid_t id_;              // 进程 id
+    std::thread thread_;    // 线程, 不可拷贝
+    FunCallback cb_;        // 线程需要运行的函数
+    std::string name_;      // 线程名
+    Semaphore sem_;         // 引入信号量完成线程同步创建
+
+    static std::atomic<int> numCreated_; // 记录已创建线程个数
 };
+
+inline std::atomic<int> Thread::numCreated_ = 0;
 
 inline thread_local Thread *threadPtr = nullptr;       // 当前 Thread 对象指针
 inline thread_local std::string threadName = "UNKNOWN"; // 当前线程名称
 
-Thread::Thread(FunCallback cb, const std::string &name) : cb_(std::move(cb)), name_(name) {
-    thread_ = std::thread([this]() {
+inline Thread::Thread(FunCallback cb, const std::string &name)
+    : id_(0)
+    , cb_(std::move(cb))
+    , name_(name) {
+    if (!cb_) {
+        throw std::invalid_argument("Thread callback must not be empty");
+    }
+    setDefaultName();
+    thread_ = std::thread([this]() { // 创建新的子线程
         threadName = name_;   // 在新线程的 TLS 里设
         threadPtr  = this;    // 在新线程的 TLS 里设
         id_ = GetThreadId();
@@ -92,24 +115,31 @@ Thread::Thread(FunCallback cb, const std::string &name) : cb_(std::move(cb)), na
     sem_.wait();              // 阻塞直到新线程完成初始化
 }
 
-Thread::~Thread() {
+inline Thread::~Thread() {
     if (thread_.joinable()) {
         thread_.join();
     }
 }
 
-Thread *Thread::GetThis() {
+inline Thread *Thread::GetThis() {
     return threadPtr;
 }
 
-const std::string &Thread::GetName() {
+inline const std::string &Thread::GetName() {
     return threadName;
 }
 
-void Thread::SetName(const std::string &name) {
+inline void Thread::SetName(const std::string &name) {
     if (threadPtr)
         threadPtr->name_ = name;
     threadName = name;
+}
+
+inline void Thread::setDefaultName() {
+    const int num = ++numCreated_;
+    if (name_.empty()) {
+        name_ = "Thread " + std::to_string(num);
+    }
 }
 
 } // namespace netlib
