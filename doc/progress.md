@@ -1,6 +1,6 @@
 # 项目进度
 
-更新日期：2026-10-17。
+更新日期：2026-10-18。
 
 ## 当前方向
 
@@ -21,12 +21,13 @@
 | EventLoop | 基本实现完成 | one loop per thread、事件分发、待办任务队列、eventfd 跨线程唤醒和退出 |
 | EventLoopThread | 最小实现 | 延迟到 startLoop 创建 Thread，等待循环初始化就绪，退出时停止循环并回收线程 |
 | Buffer / InetAddress | 已有实现 | Buffer 管理收发缓冲区；InetAddress 当前只封装 IPv4，不支持 IPv6 |
+| Socket | 最小实现 | 独占 fd、IPv4 绑定接入、accept4 标志、关闭写端与常用选项；覆盖错误路径、多翻译单元及 NDEBUG，尚未接入 Acceptor / TcpConnection |
 | Acceptor | 待完善 | 已有监听与接入流程，需要调整监听时机、状态和错误处理 |
 | TcpConnection | 待完善 | 已有读写缓冲、事件回调和关闭流程，跨线程接口与连接生命周期仍需补齐 |
 | Fiber / Scheduler / Timer | 已有学习原型 | 已有单独测试和学习笔记，尚未与 Reactor 整合，跨翻译单元与 NDEBUG 适配仍需审查 |
 | EventLoopThreadPool | 最小实现 | 管理工作循环、零线程回退和轮询分配；补齐参数与线程归属检查、启动失败清理，覆盖多翻译单元与 NDEBUG |
 | TcpServer | 待实现 | 还未形成服务端连接管理层 |
-| IOManager / Hook / Socket / Stream / ByteArray | 后续方向 | 尚未实现，是否引入及如何与 Reactor 协作届时再确定 |
+| IOManager / Hook / Stream / ByteArray | 后续方向 | 尚未实现，是否引入及如何与 Reactor 协作届时再确定 |
 
 Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epoll 的具体封装。Poller 保存 Channel 借用指针，不负责释放 Channel 或关闭其 fd。
 
@@ -61,11 +62,20 @@ Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epo
 - 有工作线程时仅在工作循环之间轮询；零工作线程时使用 baseLoop。返回的循环指针均不转移所有权，使用期间不得让工作循环自行退出。
 - 线程池销毁时由 EventLoopThread 的析构停止并回收工作线程，不负责停止或销毁 baseLoop。
 
+## 已确定的 Socket 约定
+
+- 构造时接管传入 socket fd 的独占所有权，要求 fd 非负；外部不能再次关闭它，析构时统一 close。原有 fd 的 NONBLOCK/CLOEXEC 标志由创建方设置。
+- 绑定和监听失败时保存 errno，输出包含操作、fd 和错误码的 FATAL 日志后终止。
+- `accept()` 要求非空对端地址指针，使用初始化后的 IPv4 地址和长度调用 `accept4()`；成功返回的 fd 同时设置 NONBLOCK/CLOEXEC，由调用方接管。
+- 接入失败返回 -1、保留 errno 且不修改对端地址，由调用方区分 EAGAIN、EINTR 等错误。
+- 关闭写端和选项设置保持 void 接口，失败时记录操作、fd、选项名（适用时）和 errno，不抛异常；选项值使用 int。
+- `shutdownWrite()` 只关闭内核写端；连接层仍需负责用户态输出缓冲排空的时机。Socket 尚未接入 Acceptor / TcpConnection，不代表已有连接层待办已经解决。
+
 ## 后续推进建议
 
 EventLoopThreadPool 的当前最小实现与验证已完成。以下是后续建议的学习顺序，不表示已经授权直接实现所有后续模块：
 
-1. 调整 Acceptor：分离构造与 `listen()`，维护监听状态，完善接入 fd 的创建、交接和异常清理。
+1. 调整 Acceptor：接入 Socket 封装，分离构造与 `listen()`，维护监听状态，完善接入 fd 的创建、交接和异常清理。
 2. 完善 TcpConnection：接入 Channel tie，补齐跨线程发送与关闭，确保输出缓冲排空后再关闭写端。
 3. 实现 TcpServer：组织 Acceptor、连接集合、连接创建和销毁。
 4. 补充端到端网络验证，再评估协程原型的复习、修正与整合。
@@ -88,7 +98,8 @@ EventLoopThreadPool 的当前最小实现与验证已完成。以下是后续建
 
 ## 验证记录与文档分工
 
-- 最近一次记录的完整代码验证为 2026-10-17：测试和示例均编译成功，19 项 CTest 通过。
+- 最近一次记录的完整代码验证为 2026-10-18：测试和示例均编译成功，21 项 CTest 通过。
+- Socket 测试使用 127.0.0.1 临时端口，覆盖接入地址和标志、EAGAIN/EBADF、错误日志及 errno、四种选项开关、写端关闭与读端继续接收、fd 析构回收、FATAL 与参数约束，并覆盖多翻译单元和 NDEBUG。头文件通过带 `-Wall -Wextra -Wpedantic -Werror` 的独立包含检查。
 - EventLoopThread 测试覆盖未启动析构、初始化就绪、跨线程任务、重复启动、立即析构、循环先退出和启动期间退出，并覆盖多翻译单元与 NDEBUG。
 - EventLoopThreadPool 测试覆盖零线程回退、初始化就绪、轮询与跨线程任务、析构回收、非法配置、重复及重入启动、启动失败清理和线程归属，并覆盖多翻译单元与 NDEBUG；通过回调复制异常验证部分启动后的回收，不涉及工作线程内异常传播。
 - EPollPoller 测试使用真实 epoll 后端；EventLoop 独立测试使用 `tests/support/` 的 poll 后端进行故障注入，两者用途不同。

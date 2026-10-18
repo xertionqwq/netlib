@@ -55,6 +55,7 @@ ctest --test-dir build -R '^(test_channel|test_epollpoller|test_eventloop|test_e
 ctest --test-dir build -R '^test_thread$' --output-on-failure
 ctest --test-dir build -R '^test_log(_ndebug)?$' --output-on-failure
 ctest --test-dir build -R '^test_net$' --output-on-failure
+ctest --test-dir build -R '^test_socket(_ndebug)?$' --output-on-failure
 ```
 
 - 按变更运行相关测试，必要时验证示例构建和真实网络行为。涉及共享基础设施时运行完整回归。

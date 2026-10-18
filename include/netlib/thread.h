@@ -92,7 +92,7 @@ private:
     static std::atomic<int> numCreated_; // 记录已创建线程个数
 };
 
-inline std::atomic<int> Thread::numCreated_ = 0;
+inline std::atomic<int> Thread::numCreated_(0);
 
 inline thread_local Thread *threadPtr = nullptr;       // 当前 Thread 对象指针
 inline thread_local std::string threadName = "UNKNOWN"; // 当前线程名称

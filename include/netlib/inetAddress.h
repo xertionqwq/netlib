@@ -37,6 +37,9 @@ public:
     sockaddr* sockaddrPtr() {
         return reinterpret_cast<struct sockaddr *>(&addr_);
     }
+
+    void setSockAddrInet(const sockaddr_in &addr) { addr_ = addr; }
+
     // 返回大小
     socklen_t size() const { return size_; }
     socklen_t *sizePtr() {
