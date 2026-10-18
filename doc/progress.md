@@ -24,7 +24,8 @@
 | Acceptor | 待完善 | 已有监听与接入流程，需要调整监听时机、状态和错误处理 |
 | TcpConnection | 待完善 | 已有读写缓冲、事件回调和关闭流程，跨线程接口与连接生命周期仍需补齐 |
 | Fiber / Scheduler / Timer | 已有学习原型 | 已有单独测试和学习笔记，尚未与 Reactor 整合，跨翻译单元与 NDEBUG 适配仍需审查 |
-| EventLoopThreadPool / TcpServer | 待实现 | 还未形成线程池分配和服务端连接管理层 |
+| EventLoopThreadPool | 最小实现 | 管理工作循环、零线程回退和轮询分配；补齐参数与线程归属检查、启动失败清理，覆盖多翻译单元与 NDEBUG |
+| TcpServer | 待实现 | 还未形成服务端连接管理层 |
 | IOManager / Hook / Socket / Stream / ByteArray | 后续方向 | 尚未实现，是否引入及如何与 Reactor 协作届时再确定 |
 
 Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epoll 的具体封装。Poller 保存 Channel 借用指针，不负责释放 Channel 或关闭其 fd。
@@ -50,16 +51,24 @@ Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epo
 - 仅允许启动一次，重复启动抛出 `std::logic_error`；启动和析构由同一控制线程串行执行。
 - 返回的 `EventLoop*` 是借用指针，仅在工作线程的 EventLoop 存活时有效；调用方不能删除它，也不能在循环退出后继续访问。
 
+### EventLoopThreadPool
+
+- 构造、配置、启动、查询和析构均在 baseLoop 所属线程执行；baseLoop 为借用指针，必须在线程池销毁后才能销毁。
+- 构造时不创建工作线程；负线程数抛出 `std::invalid_argument`，启动后不再允许配置或重复启动。
+- `start()` 按值接收可选初始化回调，等待各工作循环初始化完成；零工作线程时在 baseLoop 线程执行回调。
+- `startAttempted_` 在启动前置位，阻止重入启动和修改配置；`started_` 仅在初始化全部成功后置位。
+- 控制线程中的 `start()` 捕获异常后，清空借用指针并停止、回收已创建线程，再传播原异常；失败后 `started()` 返回 false，不支持重试、修改配置或获取循环。工作线程入口异常策略仍属于暂缓事项。
+- 有工作线程时仅在工作循环之间轮询；零工作线程时使用 baseLoop。返回的循环指针均不转移所有权，使用期间不得让工作循环自行退出。
+- 线程池销毁时由 EventLoopThread 的析构停止并回收工作线程，不负责停止或销毁 baseLoop。
+
 ## 后续推进建议
 
-以下是当前建议的学习顺序，不表示已经授权直接实现所有后续模块：
+EventLoopThreadPool 的当前最小实现与验证已完成。以下是后续建议的学习顺序，不表示已经授权直接实现所有后续模块：
 
-1. 阅读并审查 EventLoopThread 的最小实现，掌握两层就绪同步、借用指针和退出回收。
-2. 调整 Acceptor：分离构造与 `listen()`，维护监听状态，完善接入 fd 的创建、交接和异常清理。
-3. 完善 TcpConnection：接入 Channel tie，补齐跨线程发送与关闭，确保输出缓冲排空后再关闭写端。
-4. 实现 EventLoopThreadPool：管理工作循环并选择连接所属循环。
-5. 实现 TcpServer：组织 Acceptor、连接集合、连接创建和销毁。
-6. 补充端到端网络验证，再评估协程原型的复习、修正与整合。
+1. 调整 Acceptor：分离构造与 `listen()`，维护监听状态，完善接入 fd 的创建、交接和异常清理。
+2. 完善 TcpConnection：接入 Channel tie，补齐跨线程发送与关闭，确保输出缓冲排空后再关闭写端。
+3. 实现 TcpServer：组织 Acceptor、连接集合、连接创建和销毁。
+4. 补充端到端网络验证，再评估协程原型的复习、修正与整合。
 
 ### 网络层已知待办
 
@@ -79,8 +88,9 @@ Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epo
 
 ## 验证记录与文档分工
 
-- 最近一次记录的完整代码验证为 2026-10-17：测试和示例均编译成功，17 项 CTest 通过。
+- 最近一次记录的完整代码验证为 2026-10-17：测试和示例均编译成功，19 项 CTest 通过。
 - EventLoopThread 测试覆盖未启动析构、初始化就绪、跨线程任务、重复启动、立即析构、循环先退出和启动期间退出，并覆盖多翻译单元与 NDEBUG。
+- EventLoopThreadPool 测试覆盖零线程回退、初始化就绪、轮询与跨线程任务、析构回收、非法配置、重复及重入启动、启动失败清理和线程归属，并覆盖多翻译单元与 NDEBUG；通过回调复制异常验证部分启动后的回收，不涉及工作线程内异常传播。
 - EPollPoller 测试使用真实 epoll 后端；EventLoop 独立测试使用 `tests/support/` 的 poll 后端进行故障注入，两者用途不同。
 - 构建和定向验证命令统一维护在 [AGENTS.md](../AGENTS.md)，实际测试数量以 CMake/CTest 为准。
 - 学习细节维护在 [learning-log/](learning-log/)；通用协作约定维护在 AGENTS.md，CLAUDE.md 仅作为入口。

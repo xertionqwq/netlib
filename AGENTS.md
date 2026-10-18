@@ -51,7 +51,7 @@ ctest --test-dir build --output-on-failure --timeout 30
 常用定向验证：
 
 ```sh
-ctest --test-dir build -R '^(test_channel|test_epollpoller|test_eventloop|test_eventloopthread)(_ndebug)?$' --output-on-failure
+ctest --test-dir build -R '^(test_channel|test_epollpoller|test_eventloop|test_eventloopthread|test_eventloopthreadpool)(_ndebug)?$' --output-on-failure
 ctest --test-dir build -R '^test_thread$' --output-on-failure
 ctest --test-dir build -R '^test_log(_ndebug)?$' --output-on-failure
 ctest --test-dir build -R '^test_net$' --output-on-failure
