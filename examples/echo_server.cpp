@@ -32,6 +32,7 @@ int main() {
         conn->connectEstablished();
     });
 
+    acceptor.listen();
     std::cout << "Echo server listening on port 8888" << std::endl;
     loop.loop(); // 事件循环, 等待 fd 就绪
     return 0;

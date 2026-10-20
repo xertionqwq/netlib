@@ -1,6 +1,6 @@
 # 项目进度
 
-更新日期：2026-10-18。
+更新日期：2026-10-19。
 
 ## 当前方向
 
@@ -21,8 +21,8 @@
 | EventLoop | 基本实现完成 | one loop per thread、事件分发、待办任务队列、eventfd 跨线程唤醒和退出 |
 | EventLoopThread | 最小实现 | 延迟到 startLoop 创建 Thread，等待循环初始化就绪，退出时停止循环并回收线程 |
 | Buffer / InetAddress | 已有实现 | Buffer 管理收发缓冲区；InetAddress 当前只封装 IPv4，不支持 IPv6 |
-| Socket | 最小实现 | 独占 fd、IPv4 绑定接入、accept4 标志、关闭写端与常用选项；覆盖错误路径、多翻译单元及 NDEBUG，尚未接入 Acceptor / TcpConnection |
-| Acceptor | 待完善 | 已有监听与接入流程，需要调整监听时机、状态和错误处理 |
+| Socket | 最小实现 | 独占 fd、IPv4 绑定接入、accept4 标志、关闭写端与常用选项；覆盖错误路径、多翻译单元及 NDEBUG，已接入 Acceptor，TcpConnection 待接入 |
+| Acceptor | 最小实现 | Socket 管理监听 fd，显式 listen、幂等启动、线程归属及接入错误分类；明确回调交接契约，覆盖真实接入、错误路径、多翻译单元及 NDEBUG；EMFILE 恢复待完善 |
 | TcpConnection | 待完善 | 已有读写缓冲、事件回调和关闭流程，跨线程接口与连接生命周期仍需补齐 |
 | Fiber / Scheduler / Timer | 已有学习原型 | 已有单独测试和学习笔记，尚未与 Reactor 整合，跨翻译单元与 NDEBUG 适配仍需审查 |
 | EventLoopThreadPool | 最小实现 | 管理工作循环、零线程回退和轮询分配；补齐参数与线程归属检查、启动失败清理，覆盖多翻译单元与 NDEBUG |
@@ -69,22 +69,28 @@ Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epo
 - `accept()` 要求非空对端地址指针，使用初始化后的 IPv4 地址和长度调用 `accept4()`；成功返回的 fd 同时设置 NONBLOCK/CLOEXEC，由调用方接管。
 - 接入失败返回 -1、保留 errno 且不修改对端地址，由调用方区分 EAGAIN、EINTR 等错误。
 - 关闭写端和选项设置保持 void 接口，失败时记录操作、fd、选项名（适用时）和 errno，不抛异常；选项值使用 int。
-- `shutdownWrite()` 只关闭内核写端；连接层仍需负责用户态输出缓冲排空的时机。Socket 尚未接入 Acceptor / TcpConnection，不代表已有连接层待办已经解决。
+- `shutdownWrite()` 只关闭内核写端；连接层仍需负责用户态输出缓冲排空的时机。Socket 已接入 Acceptor，TcpConnection 的接入与生命周期待办仍需继续处理。
+
+## 已确定的 Acceptor 约定
+
+- 构造时检查 loop 非空及所属线程，再创建、配置和绑定监听 socket，不调用 listen 或注册读事件；reuseport 默认 false。
+- loop 是借用指针，必须比 Acceptor 存活更久；构造、配置、监听、查询和析构均在 loop 所属线程执行，回调执行期间不能销毁 Acceptor。
+- `listen()` 在内核监听和 Channel 注册均成功后设置 listening 状态，重复调用直接返回。注册失败时状态保持 false，可重试或销毁；此时内核 socket 可能已经处于监听状态。
+- 新连接回调按值接收。调用回调时转交 fd 所有权，由回调负责接管和异常清理；对端地址引用仅在本次调用期间有效。Acceptor 不在回调抛异常后无条件 close，以免关闭已转交或复用的 fd；未设置回调时直接关闭连接 fd。
+- 当前采用 LT 模式，每次读就绪接收一个连接。EAGAIN/EWOULDBLOCK 和 EINTR 直接返回；其他错误记录立即保存的 errno，EMFILE 额外标记 fd 耗尽，但尚未提供耗尽恢复。
+- 析构先禁用并移除监听 Channel，再由 Socket 析构关闭监听 fd。echo 示例在设置回调后显式调用 listen。
 
 ## 后续推进建议
 
-EventLoopThreadPool 的当前最小实现与验证已完成。以下是后续建议的学习顺序，不表示已经授权直接实现所有后续模块：
+EventLoopThreadPool、Socket 和 Acceptor 的当前最小实现与验证已完成。以下是后续建议的学习顺序，不表示已经授权直接实现所有后续模块：
 
-1. 调整 Acceptor：接入 Socket 封装，分离构造与 `listen()`，维护监听状态，完善接入 fd 的创建、交接和异常清理。
-2. 完善 TcpConnection：接入 Channel tie，补齐跨线程发送与关闭，确保输出缓冲排空后再关闭写端。
-3. 实现 TcpServer：组织 Acceptor、连接集合、连接创建和销毁。
-4. 补充端到端网络验证，再评估协程原型的复习、修正与整合。
+1. 完善 TcpConnection：接入 Socket 与 Channel tie，补齐跨线程发送与关闭，确保输出缓冲排空后再关闭写端，并明确构造失败时的 fd 责任。
+2. 实现 TcpServer：组织 Acceptor、连接集合、连接创建和销毁。
+3. 补充端到端网络验证，再评估协程原型的复习、修正与整合。
 
 ### 网络层已知待办
 
-- Acceptor 当前在构造中完成 listen 和事件注册，但 `listening_` 未同步更新；需要明确启动接口。
-- Acceptor 在检查 accept 返回值前调用 fcntl，可能覆盖 errno；后续考虑 accept4 并同时设置 NONBLOCK/CLOEXEC。
-- Acceptor 未配置新连接回调时，需要关闭已接收的 fd；系统调用错误不能仅靠标准 assert 处理。
+- Acceptor 的 EMFILE 恢复策略待定，当前仅分类并记录日志，持续耗尽 fd 时可能反复触发监听事件；后续再讨论应急 fd 或暂停接入等方案。
 - TcpConnection 尚未在连接建立时设置 Channel tie；跨线程 `send()` 和 `shutdown()` 分支仍有 TODO。
 - TcpConnection 的 shutdown 时机、状态访问和销毁所属线程需要一并审查，避免输出未排空就关闭写端。
 
@@ -98,7 +104,8 @@ EventLoopThreadPool 的当前最小实现与验证已完成。以下是后续建
 
 ## 验证记录与文档分工
 
-- 最近一次记录的完整代码验证为 2026-10-18：测试和示例均编译成功，21 项 CTest 通过。
+- 最近一次记录的完整代码验证为 2026-10-19：测试和示例均编译成功，23 项 CTest 通过；echo 示例通过 127.0.0.1:8888 收发验证。
+- Acceptor 测试使用真实 epoll 和 127.0.0.1 临时端口，覆盖构造绑定、reuseport、监听注册失败重试与幂等、左值回调、fd 和地址交接、无回调关闭、回调异常清理契约与 fd 复用、错误分类、线程归属、多翻译单元及 NDEBUG；对 socket、accept4、epoll_ctl 进行单次故障注入。头文件通过严格警告检查；EMFILE 测试验证分类和日志，不代表已实现耗尽恢复。
 - Socket 测试使用 127.0.0.1 临时端口，覆盖接入地址和标志、EAGAIN/EBADF、错误日志及 errno、四种选项开关、写端关闭与读端继续接收、fd 析构回收、FATAL 与参数约束，并覆盖多翻译单元和 NDEBUG。头文件通过带 `-Wall -Wextra -Wpedantic -Werror` 的独立包含检查。
 - EventLoopThread 测试覆盖未启动析构、初始化就绪、跨线程任务、重复启动、立即析构、循环先退出和启动期间退出，并覆盖多翻译单元与 NDEBUG。
 - EventLoopThreadPool 测试覆盖零线程回退、初始化就绪、轮询与跨线程任务、析构回收、非法配置、重复及重入启动、启动失败清理和线程归属，并覆盖多翻译单元与 NDEBUG；通过回调复制异常验证部分启动后的回收，不涉及工作线程内异常传播。
