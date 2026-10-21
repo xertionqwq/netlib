@@ -17,6 +17,13 @@
 
 namespace netlib{
 
+inline EventLoop* checkLoop(EventLoop *loop) {
+    if (!loop)
+        throw std::invalid_argument("mainLoop must not be null");
+    loop->assertInLoopThread();
+    return loop;
+}
+
 class Acceptor : private Noncopyable{
     /*
     ** Socket owns listen fd, Channel watches incoming connections
@@ -46,9 +53,7 @@ public:
     }
 
     static int createNonblockingOrDie();
-
 private:
-    static EventLoop* checkLoop(EventLoop *loop);
     void handleRead();
 
     // variable
@@ -59,13 +64,11 @@ private:
     bool listening_; // 监听和事件注册均已成功
 };
 
-inline EventLoop* Acceptor::checkLoop(EventLoop *loop) {
-    if (!loop)
-        throw std::invalid_argument("Acceptor loop must not be null");
-    loop->assertInLoopThread();
-    return loop;
-}
-
+/*
+** 根据给出的地址端口创建监听fd
+** 同时将监听 fd 和新连接创建回调封装为 channel 并放到 mainLoop 的 poller 进行事件分发
+** 事件发生时创建连接 fd, 并将 fd 交给设置的连接回调
+*/
 inline Acceptor::Acceptor(EventLoop *loop, const InetAddress &listenAddr, bool reuseport)
     : loop_(checkLoop(loop))
     , acceptSocket_(Acceptor::createNonblockingOrDie())

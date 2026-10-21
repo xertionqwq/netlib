@@ -4,11 +4,13 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include <unistd.h>
-#include <functional>
+#include <memory>
 #include <cassert>
 #include <string>
 #include <iostream>
+#include <utility>
 
+#include "netlib/Callbacks.h"
 #include "netlib/eventloop.h"
 #include "netlib/inetAddress.h"
 #include "netlib/buffer.h"
@@ -19,12 +21,6 @@ class TcpConnection : private Noncopyable,
                       public std::enable_shared_from_this<TcpConnection> {
 
 public:
-    // using alias
-    using TcpConnectionPtr = std::shared_ptr<TcpConnection>;
-    using ConnectionCallback = std::function<void(const TcpConnectionPtr &)>;
-    using MessageCallback = std::function<void(const TcpConnectionPtr &, Buffer &)>;
-    using CloseCallback = std::function<void(const TcpConnectionPtr &)>;
-
     TcpConnection(EventLoop *loop, int fd, uint16_t port) : 
         loop_(loop), state_(StateE::kConnecting), fd_(fd), 
         channel_(std::make_unique<Channel>(loop, fd)), 

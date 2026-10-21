@@ -1,6 +1,6 @@
 # 项目进度
 
-更新日期：2026-10-19。
+更新日期：2026-10-21。
 
 ## 当前方向
 
@@ -26,10 +26,12 @@
 | TcpConnection | 待完善 | 已有读写缓冲、事件回调和关闭流程，跨线程接口与连接生命周期仍需补齐 |
 | Fiber / Scheduler / Timer | 已有学习原型 | 已有单独测试和学习笔记，尚未与 Reactor 整合，跨翻译单元与 NDEBUG 适配仍需审查 |
 | EventLoopThreadPool | 最小实现 | 管理工作循环、零线程回退和轮询分配；补齐参数与线程归属检查、启动失败清理，覆盖多翻译单元与 NDEBUG |
-| TcpServer | 待实现 | 还未形成服务端连接管理层 |
+| TcpServer | 已有骨架（暂缓） | 已有接口、成员、构造和初步启动逻辑；连接接入、移除及析构清理仍为空，尚不构成最小实现 |
 | IOManager / Hook / Stream / ByteArray | 后续方向 | 尚未实现，是否引入及如何与 Reactor 协作届时再确定 |
 
 Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epoll 的具体封装。Poller 保存 Channel 借用指针，不负责释放 Channel 或关闭其 fd。
+
+网络层共用的 `TcpConnectionPtr`、`ConnectionCallback`、`MessageCallback`、`CloseCallback` 和 `WriteCompleteCallback` 统一在 `include/netlib/Callbacks.h` 的 `netlib` 命名空间声明，通过前置声明引用 TcpConnection、Buffer 和 Timestamp。当前草稿中的 MessageCallback 已改为 `const TcpConnection &`、`Buffer *`、`Timestamp` 三参形式，但 TcpConnection、测试和示例仍使用原来的 shared_ptr 与 Buffer 引用两参形式，因此当前完整构建失败；最终回调接口及调用方迁移留到完善 TcpConnection 时统一处理。
 
 ## 已确定的线程方案
 
@@ -80,16 +82,18 @@ Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epo
 - 当前采用 LT 模式，每次读就绪接收一个连接。EAGAIN/EWOULDBLOCK 和 EINTR 直接返回；其他错误记录立即保存的 errno，EMFILE 额外标记 fd 耗尽，但尚未提供耗尽恢复。
 - 析构先禁用并移除监听 Channel，再由 Socket 析构关闭监听 fd。echo 示例在设置回调后显式调用 listen。
 
-## 后续推进建议
+## 后续推进顺序
 
-EventLoopThreadPool、Socket 和 Acceptor 的当前最小实现与验证已完成。以下是后续建议的学习顺序，不表示已经授权直接实现所有后续模块：
+EventLoopThreadPool、Socket 和 Acceptor 的当前最小实现与验证已完成。2026-10-21 决定将 TcpServer 当前进度保存为 WIP 阶段快照并暂缓，后续按以下顺序学习和完善；不表示已经授权直接实现所有后续模块：
 
-1. 完善 TcpConnection：接入 Socket 与 Channel tie，补齐跨线程发送与关闭，确保输出缓冲排空后再关闭写端，并明确构造失败时的 fd 责任。
-2. 实现 TcpServer：组织 Acceptor、连接集合、连接创建和销毁。
-3. 补充端到端网络验证，再评估协程原型的复习、修正与整合。
+1. 完善 Buffer：审查索引与边界约束、空间回收和扩容、readv 收取及错误处理，并补充针对性验证。
+2. 完善 TcpConnection：统一回调接口，接入 Socket 与 Channel tie，补齐跨线程发送与关闭，确保输出缓冲排空后再关闭写端，并明确构造失败时的 fd 责任。
+3. 回到 TcpServer 整合完善：组织 Acceptor、线程池和连接集合，完成连接创建、移除、退出清理及线程归属约束。
+4. 补充端到端网络验证，再评估协程原型的复习、修正与整合。
 
 ### 网络层已知待办
 
+- TcpServer 的 newConnection、removeConnection、removeConnectionInLoop 和析构函数体仍为空。newConnection 尚未接管或关闭 Acceptor 交付的 fd，当前不能用于实际连接接入；启动时也尚未传递已配置的线程初始化回调。阶段提交仅保存学习进度，不代表可用服务端或通过完整构建的基线。
 - Acceptor 的 EMFILE 恢复策略待定，当前仅分类并记录日志，持续耗尽 fd 时可能反复触发监听事件；后续再讨论应急 fd 或暂停接入等方案。
 - TcpConnection 尚未在连接建立时设置 Channel tie；跨线程 `send()` 和 `shutdown()` 分支仍有 TODO。
 - TcpConnection 的 shutdown 时机、状态访问和销毁所属线程需要一并审查，避免输出未排空就关闭写端。
@@ -104,7 +108,8 @@ EventLoopThreadPool、Socket 和 Acceptor 的当前最小实现与验证已完�
 
 ## 验证记录与文档分工
 
-- 最近一次记录的完整代码验证为 2026-10-19：测试和示例均编译成功，23 项 CTest 通过；echo 示例通过 127.0.0.1:8888 收发验证。
+- 2026-10-21 阶段检查：TcpServer 头文件独立语法检查通过，空函数的未使用参数仍有警告；完整构建在 test_net 和 test_channel 编译时因 MessageCallback 签名与调用方不一致而失败。本次未运行 CTest，不使用上次生成的测试程序代表当前源码验证结果。
+- 最近一次记录的完整代码验证为 2026-10-20：测试和示例均编译成功，23 项 CTest 通过。Callbacks.h 通过独立、重复包含及与 TcpServer/TcpConnection 组合包含的严格警告检查；最近一次 echo 示例真实收发验证为 2026-10-19，使用 127.0.0.1:8888。
 - Acceptor 测试使用真实 epoll 和 127.0.0.1 临时端口，覆盖构造绑定、reuseport、监听注册失败重试与幂等、左值回调、fd 和地址交接、无回调关闭、回调异常清理契约与 fd 复用、错误分类、线程归属、多翻译单元及 NDEBUG；对 socket、accept4、epoll_ctl 进行单次故障注入。头文件通过严格警告检查；EMFILE 测试验证分类和日志，不代表已实现耗尽恢复。
 - Socket 测试使用 127.0.0.1 临时端口，覆盖接入地址和标志、EAGAIN/EBADF、错误日志及 errno、四种选项开关、写端关闭与读端继续接收、fd 析构回收、FATAL 与参数约束，并覆盖多翻译单元和 NDEBUG。头文件通过带 `-Wall -Wextra -Wpedantic -Werror` 的独立包含检查。
 - EventLoopThread 测试覆盖未启动析构、初始化就绪、跨线程任务、重复启动、立即析构、循环先退出和启动期间退出，并覆盖多翻译单元与 NDEBUG。

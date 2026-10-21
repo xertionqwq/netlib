@@ -105,7 +105,7 @@ void test_tcp_connection_read() {
     auto conn = std::make_shared<TcpConnection>(&loop, fds[0], 8000);
 
     bool called = false;
-    conn->setMessageCallback([&](const TcpConnection::TcpConnectionPtr&, Buffer& buf) {
+    conn->setMessageCallback([&](const TcpConnectionPtr&, Buffer& buf) {
         called = true;
         std::string data = buf.retrieveAsString(buf.readableBytes());
         assert(data == "hello");

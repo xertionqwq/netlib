@@ -8,7 +8,7 @@
 // nc 127.0.0.1 8888 → 输入 hello → 返回 hello
 
 int main() {
-    std::vector<std::shared_ptr<netlib::TcpConnection>> connections;
+    std::vector<netlib::TcpConnectionPtr> connections;
     netlib::EventLoop loop;
     netlib::InetAddress addr(8888);
     netlib::Acceptor acceptor(&loop, addr);
@@ -21,7 +21,7 @@ int main() {
 
         // 设置发送消息的回调函数
         // 我们将函数设为收到什么就发回什么
-        conn->setMessageCallback([](const netlib::TcpConnection::TcpConnectionPtr& c,
+        conn->setMessageCallback([](const netlib::TcpConnectionPtr& c,
                                      netlib::Buffer& buf) {
             std::string msg = buf.retrieveAsString(buf.readableBytes());
             if (!msg.empty() && msg.back() == '\n') msg.pop_back();
