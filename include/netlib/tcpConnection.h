@@ -122,7 +122,8 @@ private:
 };
 
 inline void TcpConnection::handleRead() {
-    auto n = inputBuf_.readFd(channel_->fd());
+    int savedErrno = 0;
+    auto n = inputBuf_.readFd(channel_->fd(), &savedErrno);
     // assert(n != 0);
     if (n > 0) {
         if (messageCallback_)
@@ -133,7 +134,7 @@ inline void TcpConnection::handleRead() {
         handleClose();
     }
     else {
-        if (errno == EAGAIN || errno == EWOULDBLOCK)
+        if (savedErrno == EAGAIN || savedErrno == EWOULDBLOCK)
             return;
         std::cout << "TcpConnection::handleRead" << std::endl;
         handleError();
