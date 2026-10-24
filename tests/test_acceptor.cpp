@@ -347,11 +347,15 @@ static void test_socket_creation_failure() {
 }
 
 static void test_thread_affinity() {
-    expectAbort([] {
+    const auto constructionOutput = expectAbort([] {
         EventLoop loop;
+        nextSocketError = EMFILE; // 若线程检查过晚，会先触发 socket 创建失败。
         std::thread worker([&] { Acceptor acceptor(&loop, InetAddress("127.0.0.1", 0)); });
         worker.join();
     });
+    check(constructionOutput.find("assertion failed:") != std::string::npos &&
+          constructionOutput.find("listen socket create") == std::string::npos,
+          "wrong-thread construction was not rejected before socket creation");
     for (int operation : {0, 1, 2}) {
         expectAbort([=] {
             EventLoop loop;

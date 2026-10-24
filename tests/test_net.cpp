@@ -102,12 +102,13 @@ void test_tcp_connection_read() {
     ::socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
     EventLoop loop;
-    auto conn = std::make_shared<TcpConnection>(&loop, fds[0], 8000);
+    auto conn = std::make_shared<TcpConnection>(
+        &loop, "net-read", fds[0], InetAddress(8000), InetAddress(0));
 
     bool called = false;
-    conn->setMessageCallback([&](const TcpConnectionPtr&, Buffer& buf) {
+    conn->setMessageCallback([&](const TcpConnectionPtr&, Buffer* buf, Timestamp) {
         called = true;
-        std::string data = buf.retrieveAsString(buf.readableBytes());
+        std::string data = buf->retrieveAllAsString();
         assert(data == "hello");
         loop.quit();
     });
@@ -116,6 +117,7 @@ void test_tcp_connection_read() {
     ::write(fds[1], "hello", 5);
     loop.loop();
 
+    conn->connectDestroyed();
     ::close(fds[1]);
     assert(called);
 }
@@ -126,17 +128,19 @@ void test_tcp_connection_write() {
     ::socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
     EventLoop loop;
-    auto conn = std::make_shared<TcpConnection>(&loop, fds[0], 8000);
+    auto conn = std::make_shared<TcpConnection>(
+        &loop, "net-write", fds[0], InetAddress(8000), InetAddress(0));
 
     conn->connectEstablished();
     conn->send("world");
-    // sendInLoop 已经在当前线程直接调了 ::write，数据已发
+    // sendInLoop 已经在当前线程直接调用 ::send，数据已交给内核。
 
     char buf[16] = {};
     ssize_t n = ::recv(fds[1], buf, sizeof(buf) - 1, 0);
     assert(n == 5);
     assert(std::string(buf) == "world");
 
+    conn->connectDestroyed();
     ::close(fds[1]);
 }
 

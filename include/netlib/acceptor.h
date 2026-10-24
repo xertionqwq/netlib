@@ -17,13 +17,6 @@
 
 namespace netlib{
 
-inline EventLoop* checkLoop(EventLoop *loop) {
-    if (!loop)
-        throw std::invalid_argument("mainLoop must not be null");
-    loop->assertInLoopThread();
-    return loop;
-}
-
 class Acceptor : private Noncopyable{
     /*
     ** Socket owns listen fd, Channel watches incoming connections
@@ -70,7 +63,7 @@ private:
 ** 事件发生时创建连接 fd, 并将 fd 交给设置的连接回调
 */
 inline Acceptor::Acceptor(EventLoop *loop, const InetAddress &listenAddr, bool reuseport)
-    : loop_(checkLoop(loop))
+    : loop_(checkLoopInThread(loop))
     , acceptSocket_(Acceptor::createNonblockingOrDie())
     , acceptChannel_(std::make_unique<Channel>(loop_, acceptSocket_.fd()))
     , listening_(false)

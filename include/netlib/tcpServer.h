@@ -84,7 +84,7 @@ inline TcpServer::TcpServer(EventLoop *loop,
                             const InetAddress &listenAddr,
                             const std::string &nameArg,
                             Option option)
-    : loop_(checkLoop(loop)) // 检查 mainLoop 不为 nullptr
+    : loop_(checkLoopInThread(loop)) // 创建资源前检查主 loop 非空及所属线程
     , ipPort_(listenAddr.toIpPort())
     , name_(nameArg)
     , acceptor_(std::make_unique<Acceptor>(loop, listenAddr, option))

@@ -1,11 +1,15 @@
 #include <atomic>
 #include <chrono>
+#include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <dirent.h>
 #include <fcntl.h>
 #include <future>
 #include <iostream>
 #include <stdexcept>
+#include <sys/resource.h>
+#include <sys/wait.h>
 #include <thread>
 #include <vector>
 
@@ -16,6 +20,8 @@ using namespace std::chrono_literals;
 
 void constructEventLoopInOtherTranslationUnit();
 pid_t threadIdInOtherTranslationUnit();
+EventLoop* checkLoopInOtherTranslationUnit(EventLoop* loop);
+EventLoop* checkOwnerLoopInOtherTranslationUnit(EventLoop* loop);
 
 static void check(bool condition, const char* message) {
     if (!condition) {
@@ -32,6 +38,58 @@ static int openFdCount() {
         ++count;
     ::closedir(directory);
     return count;
+}
+
+static void test_loop_validation_helpers() {
+    using LoopCheck = EventLoop* (*)(EventLoop*);
+    for (LoopCheck validate : {checkLoop, checkLoopInThread,
+                               checkLoopInOtherTranslationUnit,
+                               checkOwnerLoopInOtherTranslationUnit}) {
+        bool rejected = false;
+        try {
+            validate(nullptr);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        check(rejected, "loop validation accepted a null pointer");
+    }
+
+    {
+        EventLoop loop;
+        check(checkLoopInThread(&loop) == &loop &&
+              checkOwnerLoopInOtherTranslationUnit(&loop) == &loop,
+              "owner validation changed the loop pointer");
+        std::thread worker([&] {
+            check(checkLoop(&loop) == &loop &&
+                  checkLoopInOtherTranslationUnit(&loop) == &loop,
+                  "non-null validation rejected a loop from another thread");
+        });
+        worker.join();
+    }
+
+    // 在子进程验证错误线程触发断言，确保 NDEBUG 下同样生效。
+    for (LoopCheck validate : {checkLoopInThread, checkOwnerLoopInOtherTranslationUnit}) {
+        const pid_t child = ::fork();
+        check(child >= 0, "fork failed");
+        if (child == 0) {
+            const rlimit limit{0, 0};
+            if (::setrlimit(RLIMIT_CORE, &limit) != 0 ||
+                std::freopen("/dev/null", "w", stderr) == nullptr)
+                ::_exit(2);
+            EventLoop loop;
+            std::thread worker([&] { validate(&loop); });
+            worker.join();
+            ::_exit(0);
+        }
+        int status = 0;
+        pid_t waited;
+        do {
+            waited = ::waitpid(child, &status, 0);
+        } while (waited < 0 && errno == EINTR);
+        check(waited == child, "waitpid failed");
+        check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+              "owner validation accepted a loop from another thread");
+    }
 }
 
 static void test_dispatch_and_nested_queue() {
@@ -206,6 +264,7 @@ static void test_constructor_failure_cleanup() {
 
 int main() {
     Logger::setLevel(LogLevel::ERROR);
+    test_loop_validation_helpers();
     test_dispatch_and_nested_queue();
     test_cross_thread_dispatch_and_quit();
     test_quit_before_loop();

@@ -56,6 +56,7 @@ ctest --test-dir build -R '^test_thread$' --output-on-failure
 ctest --test-dir build -R '^test_log(_ndebug)?$' --output-on-failure
 ctest --test-dir build -R '^test_net$' --output-on-failure
 ctest --test-dir build -R '^test_buffer(_ndebug)?$' --output-on-failure
+ctest --test-dir build -R '^test_tcpconnection(_ndebug)?$' --output-on-failure
 ctest --test-dir build -R '^test_socket(_ndebug)?$' --output-on-failure
 ctest --test-dir build -R '^test_acceptor(_ndebug)?$' --output-on-failure
 ```

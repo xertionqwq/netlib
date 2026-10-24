@@ -133,7 +133,9 @@ inline Channel::Channel(EventLoop *loop, int fdArg) :
 // update() and remove() defined in eventloop.h
 
 // 绑定 obj 共享对象, 作为观察者查看对象是否存活
-// channel 的 tie 方法何时会被调用过
+// channel 的 tie 方法何时会被调用过, 一个新连接 TcpConnection 绑定一个 channel
+// TcpConnection 将相关回调赋给 channel_
+// 一旦 TcpConnection 对象死亡, channel_ 仍执行回调, 则结果未知
 inline void Channel::tie(const std::shared_ptr<void> &obj) {
     tie_ = obj;
     tied_ = true;

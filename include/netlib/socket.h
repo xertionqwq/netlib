@@ -36,6 +36,8 @@ public:
 
     void shutdownWrite();
 
+    static int getSocketError(int sockfd);
+
     // 选项设置失败时记录日志并保留 errno，保持现有 void 接口。
     void setTcpNoDelay(bool on);
     void setReuseAddr(bool on);
@@ -82,6 +84,15 @@ inline void Socket::shutdownWrite() {
         const int savedErrno = errno;
         NETLIB_LOG_ERROR << "shutdownWrite fd=" << sockfd_ << " errno=" << savedErrno;
     }
+}
+
+inline int Socket::getSocketError(int sockfd) {
+    int optval = 0;
+    socklen_t optlen = static_cast<socklen_t>(sizeof optval);
+    if (::getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &optval, &optlen) < 0)
+        return errno;
+    else
+        return optval;
 }
 
 inline void Socket::setTcpNoDelay(bool on) {

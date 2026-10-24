@@ -120,6 +120,19 @@ private:
     std::mutex mutex_;                          // 保护回调容器的线程安全
 };
 
+// 仅检查借用指针非空，允许在其他线程中验证目标 loop。
+inline EventLoop* checkLoop(EventLoop* loop) {
+    if (!loop)
+        throw std::invalid_argument("EventLoop must not be null");
+    return loop;
+}
+
+// 需要操作所属 loop 的资源时，同时检查当前线程。
+inline EventLoop* checkLoopInThread(EventLoop* loop) {
+    checkLoop(loop)->assertInLoopThread();
+    return loop;
+}
+
 // 记录本线程的 EventLoop，每个线程至多有一个存活实例
 inline thread_local EventLoop *loopPtr = nullptr;
 

@@ -27,6 +27,16 @@ if(NETLIB_BUILD_TESTS)
     endforeach()
     target_compile_definitions(test_buffer_ndebug PRIVATE NDEBUG)
 
+    foreach(connection_target IN ITEMS test_tcpconnection test_tcpconnection_ndebug)
+        add_executable(${connection_target} tests/test_tcpconnection.cpp tests/test_tcpconnection_peer.cpp)
+        target_link_libraries(${connection_target} PRIVATE netlib)
+        target_link_options(${connection_target} PRIVATE
+            "-Wl,--wrap=readv" "-Wl,--wrap=send" "-Wl,--wrap=shutdown")
+        add_test(NAME ${connection_target} COMMAND ${connection_target})
+        set_tests_properties(${connection_target} PROPERTIES TIMEOUT 20)
+    endforeach()
+    target_compile_definitions(test_tcpconnection_ndebug PRIVATE NDEBUG)
+
     foreach(socket_target IN ITEMS test_socket test_socket_ndebug)
         add_executable(${socket_target} tests/test_socket.cpp tests/test_socket_peer.cpp)
         target_link_libraries(${socket_target} PRIVATE netlib)

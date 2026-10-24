@@ -133,11 +133,12 @@ static void test_registration_failure() {
 static void test_hup_preserves_data() {
     SocketPair pair;
     EventLoop loop;
-    auto connection = std::make_shared<TcpConnection>(&loop, pair.release(0), 8000);
+    auto connection = std::make_shared<TcpConnection>(
+        &loop, "channel-hup", pair.release(0), InetAddress(8000), InetAddress(0));
     std::string received;
     int closed = 0;
-    connection->setMessageCallback([&](const auto&, Buffer& buffer) {
-        received += buffer.retrieveAsString(buffer.readableBytes());
+    connection->setMessageCallback([&](const auto&, Buffer* buffer, Timestamp) {
+        received += buffer->retrieveAllAsString();
     });
     connection->setCloseCallback([&](const auto&) {
         ++closed;
@@ -158,11 +159,12 @@ static void test_half_close_and_fd_reuse() {
     SocketPair pair;
     EventLoop loop;
     const int originalFd = pair.fd(0);
-    auto connection = std::make_shared<TcpConnection>(&loop, pair.release(0), 8000);
+    auto connection = std::make_shared<TcpConnection>(
+        &loop, "channel-half-close", pair.release(0), InetAddress(8000), InetAddress(0));
     std::string received;
     int closed = 0;
-    connection->setMessageCallback([&](const auto& conn, Buffer& buffer) {
-        received += buffer.retrieveAsString(buffer.readableBytes());
+    connection->setMessageCallback([&](const auto& conn, Buffer* buffer, Timestamp) {
+        received += buffer->retrieveAllAsString();
         conn->send("reply");
     });
     connection->setCloseCallback([&](const auto&) {
@@ -178,13 +180,18 @@ static void test_half_close_and_fd_reuse() {
           && std::string(reply, sizeof reply) == "reply", "half-close prevented reply");
     check(received == "last" && closed == 1, "RDHUP discarded data or closed twice");
 
+    check(::fcntl(originalFd, F_GETFD) >= 0, "Socket released fd before owner destruction");
+    connection->connectDestroyed();
+    connection->connectDestroyed();
+    connection.reset(); // Socket 只在连接的最后一个引用释放时关闭 fd。
+    check(::fcntl(originalFd, F_GETFD) == -1 && errno == EBADF,
+          "connection destruction did not close its fd");
     const int reusedFd = ::dup(pair.fd(1));
     check(reusedFd == originalFd, "closed fd was not reused");
     Channel replacement(&loop, reusedFd);
     replacement.enableReading();
-    connection.reset();
     check(::fcntl(reusedFd, F_GETFD) >= 0 && loop.hasChannel(&replacement),
-          "old connection closed a reused fd or removed its mapping");
+          "reused fd could not be registered independently");
     replacement.disableAll();
     replacement.remove();
     ::close(reusedFd);
