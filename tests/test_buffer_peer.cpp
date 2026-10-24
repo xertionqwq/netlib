@@ -11,3 +11,7 @@ void appendInOtherTranslationUnit(netlib::Buffer& buffer, const std::string& dat
 const size_t* bufferConstantInOtherTranslationUnit() {
     return &netlib::Buffer::kCheapPrepend;
 }
+
+ssize_t writeInOtherTranslationUnit(netlib::Buffer& buffer, int fd, int* savedErrno) {
+    return buffer.writeFd(fd, savedErrno);
+}

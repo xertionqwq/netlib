@@ -19,6 +19,27 @@ using netlib::Buffer;
 Buffer makeBufferInOtherTranslationUnit(size_t initialSize);
 void appendInOtherTranslationUnit(Buffer& buffer, const std::string& data);
 const size_t* bufferConstantInOtherTranslationUnit();
+ssize_t writeInOtherTranslationUnit(Buffer& buffer, int fd, int* savedErrno);
+
+namespace {
+int watchedWriteFd = -1;
+int nextWriteError = 0;
+int watchedWriteCalls = 0;
+}
+
+// 仅向指定 fd 注入一次错误，其余写入均进入真实的 write。
+extern "C" ssize_t __real_write(int, const void*, size_t);
+extern "C" ssize_t __wrap_write(int fd, const void* data, size_t length) {
+    if (watchedWriteFd >= 0 && fd == watchedWriteFd) {
+        ++watchedWriteCalls;
+        if (nextWriteError != 0) {
+            errno = nextWriteError;
+            nextWriteError = 0;
+            return -1;
+        }
+    }
+    return __real_write(fd, data, length);
+}
 
 static void check(bool condition, const char* message) {
     if (!condition) {
@@ -69,6 +90,25 @@ static void writeBytes(int fd, const std::string& data) {
         check(n > 0, "writing pipe data failed");
         offset += static_cast<size_t>(n);
     }
+}
+
+static std::string readBytes(int fd, size_t length) {
+    std::string result(length, '\0');
+    size_t offset = 0;
+    while (offset < length) {
+        const ssize_t n = ::read(fd, result.data() + offset, length - offset);
+        if (n < 0 && errno == EINTR)
+            continue;
+        check(n > 0, "reading written pipe data failed");
+        offset += static_cast<size_t>(n);
+    }
+    return result;
+}
+
+static size_t pipeCapacity(const Pipe& pipe) {
+    const int capacity = ::fcntl(pipe.writer(), F_GETPIPE_SZ);
+    check(capacity > 0, "querying pipe capacity failed");
+    return static_cast<size_t>(capacity);
 }
 
 template <typename Callback>
@@ -188,6 +228,122 @@ static void test_read_errors_and_preconditions() {
           "readFd consumed input before validating its error output");
 }
 
+static void test_write_fd() {
+    for (size_t size : {size_t{0}, size_t{32}}) {
+        Pipe pipe;
+        Buffer buffer(size);
+        const std::string binary("a\0b\xff\n", 5);
+        buffer.append("skip", 4);
+        buffer.append(binary);
+        buffer.retrieve(4); // 确认 writeFd 从当前可读位置写出，不包含已消费数据。
+        int savedErrno = 123;
+        check(buffer.writeFd(pipe.writer(), &savedErrno) == static_cast<ssize_t>(binary.size()),
+              "writeFd did not report the bytes written");
+        check(savedErrno == 123, "successful write changed the error output");
+        check(readBytes(pipe.reader(), binary.size()) == binary, "writeFd corrupted binary data");
+        check(buffer.readableBytes() == 0 && buffer.prependableBytes() == Buffer::kCheapPrepend,
+              "complete write did not consume data and reset indices");
+
+        check(buffer.writeFd(pipe.writer(), &savedErrno) == 0 && savedErrno == 123,
+              "empty write changed the error output or returned a nonzero count");
+        char byte;
+        check(::read(pipe.reader(), &byte, 1) == -1 && (errno == EAGAIN || errno == EWOULDBLOCK),
+              "empty write produced unexpected data");
+        buffer.append("reuse", 5);
+        check(writeInOtherTranslationUnit(buffer, pipe.writer(), &savedErrno) == 5 &&
+              savedErrno == 123 && buffer.readableBytes() == 0 &&
+              readBytes(pipe.reader(), 5) == "reuse", "cross-translation-unit write or reuse failed");
+    }
+}
+
+static void test_partial_write_and_resume() {
+    Pipe pipe;
+    const size_t capacity = pipeCapacity(pipe);
+    const std::string data = pattern(capacity * 2 + 17);
+    Buffer buffer;
+    buffer.append("skip", 4);
+    buffer.append(data);
+    buffer.retrieve(4);
+    const char* initial = buffer.peek();
+    int savedErrno = 123;
+    const ssize_t first = buffer.writeFd(pipe.writer(), &savedErrno);
+    check(first > 0 && static_cast<size_t>(first) < data.size(),
+          "nonblocking pipe did not produce a real partial write");
+    size_t consumed = static_cast<size_t>(first);
+    check(savedErrno == 123 && buffer.peek() == initial + consumed,
+          "partial write changed error output or consumed an incorrect prefix");
+    checkContent(buffer, data.substr(consumed));
+    std::string received = readBytes(pipe.reader(), consumed);
+    while (buffer.readableBytes() > 0) {
+        const ssize_t n = writeInOtherTranslationUnit(buffer, pipe.writer(), &savedErrno);
+        check(n > 0 && savedErrno == 123, "resumed write failed on a drained pipe");
+        consumed += static_cast<size_t>(n);
+        checkContent(buffer, data.substr(consumed));
+        received += readBytes(pipe.reader(), static_cast<size_t>(n));
+    }
+    check(received == data && buffer.prependableBytes() == Buffer::kCheapPrepend,
+          "partial writes lost, duplicated, or reordered bytes");
+}
+
+static void test_write_errors_and_preconditions() {
+    Pipe pipe;
+    const std::string filler = pattern(pipeCapacity(pipe));
+    writeBytes(pipe.writer(), filler);
+    Buffer buffer;
+    buffer.append("keep", 4);
+    const char* initial = buffer.peek();
+    const size_t writable = buffer.writableBytes();
+    int savedErrno = 0;
+    check(buffer.writeFd(pipe.writer(), &savedErrno) == -1 &&
+          (savedErrno == EAGAIN || savedErrno == EWOULDBLOCK),
+          "full nonblocking pipe did not preserve EAGAIN");
+    checkContent(buffer, "keep");
+    check(buffer.peek() == initial && buffer.writableBytes() == writable,
+          "failed write advanced buffer indices");
+    check(buffer.writeFd(-1, &savedErrno) == -1 && savedErrno == EBADF,
+          "invalid write fd did not preserve EBADF");
+    checkContent(buffer, "keep");
+    check(readBytes(pipe.reader(), filler.size()) == filler, "failed write modified pipe contents");
+    savedErrno = 123;
+    check(buffer.writeFd(pipe.writer(), &savedErrno) == 4 && savedErrno == 123 &&
+          buffer.readableBytes() == 0 && readBytes(pipe.reader(), 4) == "keep",
+          "write did not recover after EAGAIN");
+
+    buffer.append("guard", 5);
+    expectAbort([&] { buffer.writeFd(pipe.writer(), nullptr); });
+    char byte;
+    check(::read(pipe.reader(), &byte, 1) == -1 && (errno == EAGAIN || errno == EWOULDBLOCK),
+          "writeFd changed the pipe before validating its error output");
+    checkContent(buffer, "guard");
+}
+
+static void test_interrupted_write_preserves_data() {
+    for (int error : {EINTR, EIO}) {
+        Pipe pipe;
+        Buffer buffer;
+        const std::string binary("keep\0data", 9);
+        buffer.append(binary);
+        watchedWriteFd = pipe.writer();
+        watchedWriteCalls = 0;
+        nextWriteError = error;
+        int savedErrno = 0;
+        check(buffer.writeFd(pipe.writer(), &savedErrno) == -1 && savedErrno == error &&
+              nextWriteError == 0 && watchedWriteCalls == 1,
+              "writeFd retried or lost an injected write error");
+        checkContent(buffer, binary);
+        char byte;
+        check(::read(pipe.reader(), &byte, 1) == -1 && (errno == EAGAIN || errno == EWOULDBLOCK),
+              "failed write unexpectedly produced data");
+        savedErrno = 123;
+        check(writeInOtherTranslationUnit(buffer, pipe.writer(), &savedErrno) ==
+                  static_cast<ssize_t>(binary.size()) && savedErrno == 123 &&
+              watchedWriteCalls == 2 && buffer.readableBytes() == 0,
+              "caller retry did not consume the original data exactly once");
+        check(readBytes(pipe.reader(), binary.size()) == binary, "caller retry corrupted data");
+        watchedWriteFd = -1;
+    }
+}
+
 static void test_persistent_bounds_checks() {
     expectAbort([] { Buffer buffer; buffer.retrieve(1); });
     expectAbort([] { Buffer buffer; buffer.retrieveAsString(1); });
@@ -243,6 +399,10 @@ int main() {
     test_self_append();
     test_read_fd();
     test_read_errors_and_preconditions();
+    test_write_fd();
+    test_partial_write_and_resume();
+    test_write_errors_and_preconditions();
+    test_interrupted_write_preserves_data();
     test_persistent_bounds_checks();
     test_oversized_requests();
     test_copy_and_multiple_translation_units();

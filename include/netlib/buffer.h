@@ -2,6 +2,7 @@
 #define NETLIB_BUFFER_H
 
 #include <sys/uio.h>
+#include <unistd.h>
 #include <cstring>
 #include <cerrno>
 #include <functional>
@@ -102,6 +103,18 @@ public:
             writerIdx_ = buf_.size();
             append(extrabuf, static_cast<size_t>(n) - writable); // 将 extrabuf 的数据追加至 buf_
         }
+        return n;
+    }
+    // 将可读数据写入 fd；savedErrno 必须非空，仅在失败时写入错误码。
+    // 成功时只消费实际写出的字节；重试与 SIGPIPE 策略由调用方管理。
+    ssize_t writeFd(int fd, int *savedErrno) {
+        NETLIB_ASSERT(savedErrno != nullptr);
+        const ssize_t n = ::write(fd, peek(), readableBytes());
+        if (n < 0) {
+            *savedErrno = errno;
+            return n;
+        }
+        retrieve(static_cast<size_t>(n)); // 只消费成功写出的数据
         return n;
     }
 

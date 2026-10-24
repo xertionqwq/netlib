@@ -20,7 +20,7 @@
 | 默认 Poller 工厂 | 已实现 | `defaultPoller.h` 选择 EPollPoller；尚无 poll 后端，相关环境变量会报告不支持 |
 | EventLoop | 基本实现完成 | one loop per thread、事件分发、待办任务队列、eventfd 跨线程唤醒和退出 |
 | EventLoopThread | 最小实现 | 延迟到 startLoop 创建 Thread，等待循环初始化就绪，退出时停止循环并回收线程 |
-| Buffer | 最小实现 | 补齐索引与容量检查、字符串提取、自追加和 readv 错误交接；覆盖真实管道读取、多翻译单元及 NDEBUG |
+| Buffer | 最小实现 | 补齐索引与容量检查、字符串提取、自追加及 fd 读写；覆盖真实管道收发、部分写入、错误交接、多翻译单元及 NDEBUG |
 | InetAddress | 已有实现 | 当前只封装 IPv4，不支持 IPv6 |
 | Socket | 最小实现 | 独占 fd、IPv4 绑定接入、accept4 标志、关闭写端与常用选项；覆盖错误路径、多翻译单元及 NDEBUG，已接入 Acceptor 与 TcpConnection |
 | Acceptor | 最小实现 | Socket 管理监听 fd，显式 listen、幂等启动、线程归属及接入错误分类；明确回调交接契约，覆盖真实接入、错误路径、多翻译单元及 NDEBUG；EMFILE 恢复待完善 |
@@ -78,6 +78,7 @@ Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epo
 - retrieve、retrieveAsString 和 hasWritten 的长度约束使用 NETLIB_ASSERT，在 NDEBUG 下同样生效；retrieveAllAsString 返回全部可读数据并复位索引。构造与扩容的容量计算避免整数回绕，超大请求抛出 std::length_error。
 - append 支持外部数据和当前可读区的自追加，长度为 0 时允许空指针；自追加需要搬移或扩容时先保存源数据，避免指针失效。原有 peek 指针在数据搬移或重新分配后可能失效。
 - readFd(fd, savedErrno) 要求错误码指针非空，调用 readv 前检查；仅失败时写回立即保存的 errno，返回 0 表示 EOF，失败与 EOF 不消费已有缓冲数据。重试、事件循环调度和 fd 生命周期由调用方管理。TcpConnection 及其消息回调调用方已适配当前接口。
+- writeFd(fd, savedErrno) 同样在系统调用前检查错误码指针非空；使用通用 write 写出当前可读区，成功时仅消费实际写出的字节，失败时保存原始 errno 并保留数据和索引。成功及零字节写入不修改错误码输出；EINTR/EAGAIN 的重试和 SIGPIPE 策略由调用方管理。TcpConnection 的 socket 发送仍使用 send(MSG_NOSIGNAL)，未改用此接口。
 
 ## 已确定的 Socket 约定
 
@@ -146,6 +147,7 @@ EventLoopThreadPool、Socket 和 Acceptor 的当前最小实现与验证已完�
 
 ## 验证记录与文档分工
 
+- 2026-10-24 Buffer writeFd 验证：扩展现有 test_buffer.cpp 与 peer 翻译单元，覆盖可读偏移和二进制数据、完整及空写入、消费后复用、真实管道部分写入与续写顺序、EAGAIN 后恢复、EBADF，以及注入 EINTR/EIO 后的数据保留和调用方重试。新增参数前置检查用例先在 Debug/NDEBUG 下复现缺陷，再补齐与 readFd 一致的 NETLIB_ASSERT，确认空错误码指针在写入 fd 前被拒绝。两个既有 Buffer 测试目标均通过，测试和示例完整构建成功，27 项回归全部通过；测试源通过严格警告检查，Buffer 专项通过 ASan/UBSan 及泄漏检测。
 - 2026-10-24 TcpConnection 独立测试重写：新增统一的 [test_tcpconnection.cpp](../tests/test_tcpconnection.cpp) 和 [peer 翻译单元](../tests/test_tcpconnection_peer.cpp)，注册 test_tcpconnection 与 test_tcpconnection_ndebug 两个目标，不恢复原先分散的临时专项文件。关键检查不依赖标准 assert；采用真实非阻塞 socketpair 和受限内核发送缓冲，仅对被测 fd 包装 readv、send、shutdown 以注入错误、短写并核对线程归属。
 - 新独立测试包含 14 组用例：构造元数据、可选回调及取消建立，二进制读取和时间戳、EOF 前数据保留，读取错误分类及原始错误码日志，三个发送重载、空消息与回调副本，跨线程消息及连接持有，部分写入与发送顺序、EINTR/EAGAIN 恢复，真实 EPIPE 与续发致命错误，默认 64 MiB 高水位通知，半关闭后继续接收与缓冲排空后 FIN，排队发送及过期关闭任务，同线程/跨线程强制关闭及优雅关闭升级，回调释放最后引用与 Channel tie，以及并发关闭后状态保持终止。
 - 本次仅新增独立测试及其 CMake/文档入口，未修改 TcpConnection 实现。测试和示例完整构建通过，当前 27 项 CTest 全部通过；两个测试源文件通过严格警告检查，独立测试另通过 ASan/UBSan 及泄漏检测。统一定向运行命令见 [AGENTS.md](../AGENTS.md)。
