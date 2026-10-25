@@ -33,9 +33,15 @@ class TcpConnection : private Noncopyable,
                       public std::enable_shared_from_this<TcpConnection> {
 
 public:
+    // 两种构造均接管 socket；原始 fd 构造失败时也负责关闭 fd。
     TcpConnection(EventLoop *loop,
                   const std::string &name,
                   int sockfd,
+                  const InetAddress &localAddr,
+                  const InetAddress &peerAddr);
+    TcpConnection(EventLoop *loop,
+                  const std::string &name,
+                  std::unique_ptr<Socket> socket,
                   const InetAddress &localAddr,
                   const InetAddress &peerAddr);
     ~TcpConnection();
@@ -155,17 +161,26 @@ inline TcpConnection::TcpConnection(EventLoop *loop,
                                     int sockfd,
                                     const InetAddress &localAddr,
                                     const InetAddress &peerAddr)
+    : TcpConnection(loop, nameArg, Socket::adopt(sockfd), localAddr, peerAddr) {
+}
+
+inline TcpConnection::TcpConnection(EventLoop *loop,
+                                    const std::string &nameArg,
+                                    std::unique_ptr<Socket> socket,
+                                    const InetAddress &localAddr,
+                                    const InetAddress &peerAddr)
     : loop_(checkLoop(loop)) // 仅检查非空，允许在其他线程构造后交给 I/O loop 建立
     , name_(nameArg)
     , state_(StateE::kConnecting)
     , reading_(true)
     , writeShutdown_(false)
-    , socket_(std::make_unique<Socket>(sockfd))
-    , channel_(std::make_unique<Channel>(loop, sockfd))
+    , socket_(std::move(socket))
+    , channel_(std::make_unique<Channel>(loop, socket_ ? socket_->fd() : -1))
     , localAddr_(localAddr)
     , peerAddr_(peerAddr)
     , highWaterMark_(64 * 1024 * 1024) // 64M
 {
+    NETLIB_ASSERT(socket_ != nullptr);
     // 给 channel 设置相应的回调函数
     // poller 通知 channel 感兴趣的事件发生了
     // EventLoop 内 channel 执行 handleEvent()
@@ -181,7 +196,7 @@ inline TcpConnection::TcpConnection(EventLoop *loop,
 
     NETLIB_LOG_DEBUG << "TcpConnection::ctor["
                      << name_ << "] at " << this
-                     << " fd=" << sockfd << '\n';
+                     << " fd=" << socket_->fd() << '\n';
     socket_->setKeepAlive(true);
 }
 
@@ -190,7 +205,8 @@ inline TcpConnection::~TcpConnection() {
                         << name_ << "] at " << this
                         << " fd=" << channel_->fd()
                         << " state=" << enumToStr() << '\n';
-    NETLIB_ASSERT(state_ == StateE::kDisconnected);
+    // 尚未建立的连接没有注册 Channel，可在构造线程中直接取消。
+    NETLIB_ASSERT(state_ == StateE::kDisconnected || state_ == StateE::kConnecting);
 }
 
 inline void TcpConnection::handleRead(Timestamp receiveTime) {
@@ -251,6 +267,7 @@ inline void TcpConnection::handleWrite() {
         shutdownInLoop();
 }
 
+// poller -> channel::closeCallback -> TcpConnection::handleClose
 inline void TcpConnection::handleClose() {
     loop_->assertInLoopThread();
     if (state_ == StateE::kDisconnected)
@@ -264,9 +281,9 @@ inline void TcpConnection::handleClose() {
     setState(StateE::kDisconnected);
     TcpConnectionPtr connPtr(shared_from_this()); // 试着延长对象生命
     // 如果注册过相关回调, 则执行
-    if (connectionCallback_)
+    if (connectionCallback_) // 连接关闭的回调
         connectionCallback_(connPtr);
-    if (closeCallback_)
+    if (closeCallback_) // 关闭连接的回调 来自 TcpServer::removeConnection 设置
         closeCallback_(connPtr);
 }
 

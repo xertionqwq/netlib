@@ -38,6 +38,16 @@ if(NETLIB_BUILD_TESTS)
     endforeach()
     target_compile_definitions(test_tcpconnection_ndebug PRIVATE NDEBUG)
 
+    foreach(server_target IN ITEMS test_tcpserver test_tcpserver_ndebug)
+        add_executable(${server_target} tests/test_tcpserver.cpp tests/test_tcpserver_peer.cpp)
+        target_link_libraries(${server_target} PRIVATE netlib)
+        target_link_options(${server_target} PRIVATE "-Wl,--wrap=socket" "-Wl,--wrap=accept4"
+            "-Wl,--wrap=getsockname" "-Wl,--wrap=epoll_ctl" "-Wl,--wrap=close")
+        add_test(NAME ${server_target} COMMAND ${server_target})
+        set_tests_properties(${server_target} PROPERTIES TIMEOUT 25)
+    endforeach()
+    target_compile_definitions(test_tcpserver_ndebug PRIVATE NDEBUG)
+
     foreach(socket_target IN ITEMS test_socket test_socket_ndebug)
         add_executable(${socket_target} tests/test_socket.cpp tests/test_socket_peer.cpp)
         target_link_libraries(${socket_target} PRIVATE netlib)

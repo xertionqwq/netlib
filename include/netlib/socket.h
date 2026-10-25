@@ -2,6 +2,8 @@
 #define NETLIB_SOCKET_H
 
 #include <cerrno>
+#include <memory>
+#include <system_error>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -25,6 +27,16 @@ public:
     }
 
     int fd() const { return sockfd_; }
+    // 立即接管 fd；即使分配 Socket 的内存失败，也负责关闭它。
+    static std::unique_ptr<Socket> adopt(int sockfd) {
+        NETLIB_ASSERT(sockfd >= 0);
+        try {
+            return std::make_unique<Socket>(sockfd);
+        } catch (...) {
+            ::close(sockfd);
+            throw;
+        }
+    }
     // 绑定 ip 与 port
     void bindAddress(const InetAddress &localaddr);
     // 开始监听
@@ -37,6 +49,7 @@ public:
     void shutdownWrite();
 
     static int getSocketError(int sockfd);
+    static sockaddr_in getLocalAddr(int sockfd);
 
     // 选项设置失败时记录日志并保留 errno，保持现有 void 接口。
     void setTcpNoDelay(bool on);
@@ -93,6 +106,17 @@ inline int Socket::getSocketError(int sockfd) {
         return errno;
     else
         return optval;
+}
+
+inline sockaddr_in Socket::getLocalAddr(int sockfd) {
+    sockaddr_in local{};
+    socklen_t addrlen = static_cast<socklen_t>(sizeof local);
+    if (::getsockname(sockfd, reinterpret_cast<sockaddr*>(&local), &addrlen) < 0) {
+        const int savedErrno = errno;
+        throw std::system_error(savedErrno, std::generic_category(),
+                                "getsockname fd=" + std::to_string(sockfd));
+    }
+    return local;
 }
 
 inline void Socket::setTcpNoDelay(bool on) {

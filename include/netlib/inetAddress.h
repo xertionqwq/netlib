@@ -31,6 +31,10 @@ public:
             throw std::invalid_argument("invalid IPv4 address: " + ip);
         size_ = sizeof(addr_);
     }
+    InetAddress(sockaddr_in other) {
+        addr_ = other;
+        size_ = sizeof(addr_);
+    }
 
     // for vairable
     const sockaddr_in &addr() const { return addr_; }

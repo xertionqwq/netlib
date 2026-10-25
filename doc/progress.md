@@ -1,6 +1,6 @@
 # 项目进度
 
-更新日期：2026-10-24。
+更新日期：2026-10-25。
 
 ## 当前方向
 
@@ -21,13 +21,13 @@
 | EventLoop | 基本实现完成 | one loop per thread、事件分发、待办任务队列、eventfd 跨线程唤醒和退出 |
 | EventLoopThread | 最小实现 | 延迟到 startLoop 创建 Thread，等待循环初始化就绪，退出时停止循环并回收线程 |
 | Buffer | 最小实现 | 补齐索引与容量检查、字符串提取、自追加及 fd 读写；覆盖真实管道收发、部分写入、错误交接、多翻译单元及 NDEBUG |
-| InetAddress | 已有实现 | 当前只封装 IPv4，不支持 IPv6 |
-| Socket | 最小实现 | 独占 fd、IPv4 绑定接入、accept4 标志、关闭写端与常用选项；覆盖错误路径、多翻译单元及 NDEBUG，已接入 Acceptor 与 TcpConnection |
+| InetAddress | 已有实现 | 封装 IPv4，支持从 sockaddr_in 构造，不支持 IPv6 |
+| Socket | 最小实现 | 独占 fd、IPv4 绑定接入、地址查询、accept4 标志、关闭写端与常用选项；adopt 覆盖分配失败时的 fd 回收，已接入 Acceptor 与 TcpConnection |
 | Acceptor | 最小实现 | Socket 管理监听 fd，显式 listen、幂等启动、线程归属及接入错误分类；明确回调交接契约，覆盖真实接入、错误路径、多翻译单元及 NDEBUG；EMFILE 恢复待完善 |
-| TcpConnection | 最小实现 | Socket 管理 fd，具备读写缓冲、跨线程发送与关闭、Channel tie、缓冲排空后半关闭及独立强制关闭；独立测试覆盖错误路径、缓冲续发、通知与并发生命周期，包含 Debug/NDEBUG 和多翻译单元；构造异常时的 fd 交接与 TcpServer 整合待完善 |
+| TcpConnection | 最小实现 | Socket 管理 fd，具备读写缓冲、跨线程发送与关闭、Channel tie、缓冲排空后半关闭及独立强制关闭；支持拥有 Socket 的构造和未建立连接取消，已与 TcpServer 联动验证 |
 | Fiber / Scheduler / Timer | 已有学习原型 | 已有单独测试和学习笔记，尚未与 Reactor 整合，跨翻译单元与 NDEBUG 适配仍需审查 |
 | EventLoopThreadPool | 最小实现 | 管理工作循环、零线程回退和轮询分配；补齐参数与线程归属检查、启动失败清理，覆盖多翻译单元与 NDEBUG |
-| TcpServer | 已有骨架（暂缓） | 已有接口、成员、构造和初步启动逻辑；连接接入、移除及析构清理仍为空，尚不构成最小实现 |
+| TcpServer | 最小实现 | 完成接入、轮询分发、回调转交、移表及同步析构清理；具备一次启动、存活保护和接入失败回收，覆盖零线程/多线程、错误路径、多翻译单元及 NDEBUG |
 | IOManager / Hook / Stream / ByteArray | 后续方向 | 尚未实现，是否引入及如何与 Reactor 协作届时再确定 |
 
 Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epoll 的具体封装。Poller 保存 Channel 借用指针，不负责释放 Channel 或关闭其 fd。
@@ -83,6 +83,7 @@ Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epo
 ## 已确定的 Socket 约定
 
 - 构造时接管传入 socket fd 的独占所有权，要求 fd 非负；外部不能再次关闭它，析构时统一 close。原有 fd 的 NONBLOCK/CLOEXEC 标志由创建方设置。
+- Socket::adopt(fd) 返回 unique_ptr 并负责创建 Socket 之前的分配失败回收，调用后不再由外部 close。getLocalAddr(fd) 零初始化 IPv4 地址，getsockname 失败时立即保存 errno，并通过带原始错误码和 fd 上下文的 std::system_error 上报。
 - 绑定和监听失败时保存 errno，输出包含操作、fd 和错误码的 FATAL 日志后终止。
 - `accept()` 要求非空对端地址指针，使用初始化后的 IPv4 地址和长度调用 `accept4()`；成功返回的 fd 同时设置 NONBLOCK/CLOEXEC，由调用方接管。
 - 接入失败返回 -1、保留 errno 且不修改对端地址，由调用方区分 EAGAIN、EINTR 等错误。
@@ -115,27 +116,37 @@ Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epo
 
 ## TcpConnection 已确定的关闭与生命周期约定
 
-- 连接通过 shared_ptr 管理。connectEstablished 在所属 loop 线程检查 Connecting 状态、设置 Channel tie 并启用读取；连接回调可为空，建立与下线通知均先判空。回调配置在发布连接之前或所属 loop 线程执行，不支持并发修改 std::function。
+- 活动连接通过 shared_ptr 管理。connectEstablished 在所属 loop 线程检查 Connecting 状态、设置 Channel tie 并启用读取；连接回调可为空，建立与下线通知均先判空。回调配置在发布连接之前或所属 loop 线程执行，不支持并发修改 std::function。
+- TcpConnection 保留原始 fd 构造，同时提供 unique_ptr<Socket> 构造。进入构造后，loop 检查、名称复制或 Channel 分配失败均由拥有者回收 fd；Connecting 状态表示尚未注册 Channel，可直接取消并析构。make_shared 自身的分配发生在连接构造之前，因此接入路径先用 Socket::adopt 管理 fd，再向拥有 Socket 的重载移动所有权，覆盖这一段异常窗口。
 - shutdown 使用 CAS 将 Connected 转为 Disconnecting，避免覆盖其他线程已经写入的 Disconnected；跨线程任务持有连接。shutdownInLoop 在执行时重新检查状态、写事件和输出缓冲，已断开则忽略，缓冲排空后最多请求一次关闭写端；系统调用失败仍按 Socket 约定记录日志。半关闭后保留读事件，允许对端继续回复，直到 EOF 或其他关闭条件到达。
 - forceClose 支持 Connected 和 Disconnecting 状态，即使在所属线程也通过 queueInLoop 排队，避免在本批事件分发中同步移除其他活跃 Channel。任务持有连接，执行时再次检查状态，直接进入 handleClose，不等待剩余输出缓冲发完；重复请求只产生一次下线和关闭通知。
 - handleClose 禁用并移除 Channel、设置 Disconnected，再通知下线和关闭。connectDestroyed 在所属线程执行最终清理，允许清理尚未建立的连接和重复调用；主动销毁已建立连接会发出一次下线通知，不额外调用关闭回调。当前 Poller 允许重复 remove，保留现有两个入口的移除行为。
 - connectDestroyed 在整个清理过程持有连接，防止下线回调释放调用方最后一个引用后继续访问已析构的 Channel。tie 保护整个事件回调分发，任务中的 shared_ptr 保护排队执行；fd 始终由 Socket 在最后一个连接引用释放时关闭。强制关闭进入逻辑关闭流程，不代表持有外部引用时立即释放 fd。
 
+## TcpServer 已确定的线程与生命周期约定
+
+- 构造、配置、启动与析构均在 baseLoop 所属线程执行。配置只允许在首次启动尝试之前完成；重复及重入 start、启动后修改配置均抛 std::logic_error，Debug/NDEBUG 行为一致。start 传递线程初始化回调，线程池就绪后再监听；失败后不支持重试，并回收已创建的线程池。工作线程初始化回调异常仍遵循既有 Thread/EventLoopThread 策略，未扩展暂缓事项。
+- 接入后首先用 Socket::adopt 接管 fd，再读取本地地址、生成连接名、构造连接、配置回调和入表。拥有 Socket 的构造保证失败时不会泄漏或重复关闭 fd；配置、入表或排队失败时回滚未建立连接。建立任务在 ioLoop 排队执行，若 Server 已开始析构则取消；连接注册失败会清理 Channel 并通知 baseLoop 移表，后续连接仍可接入。
+- connections_ 只在 baseLoop 修改。连接关闭通知先向 baseLoop 排队，只捕获 Server 存活标志及连接的弱引用；在 baseLoop 检查存活状态后才访问 Server。移表后按值持有连接，向所属 ioLoop 排队 connectDestroyed，避免借用已返回回调的栈变量。
+- 连接与写完成回调可为空。消息回调默认消费输入缓冲，显式清空该回调时也采用这一策略。用户回调应不抛异常；工作线程回调不得同步等待正在析构的 baseLoop。
+- 析构必须在 baseLoop 线程、事件分发之外执行。先使存活标志失效并销毁 Acceptor，再清理 baseLoop 上的连接，并向每个工作 loop 提交连接清理和下一轮队列确认任务；即使该 loop 的连接已经移表，也等待此前的清理与本批回调结束。完成确认后释放连接表引用，再停止和回收线程池。工作 loop 不得自行退出，否则无法完成同步清理。
+- Server 析构按强制清理处理，不保证待发送缓冲排空；需要优雅下线时由应用先完成连接层 shutdown 和业务收尾。外部共享引用仍决定 fd 最终释放时机；Server 销毁后不能继续使用其工作 loop 借用指针，也不能再对保留的已断开连接调用需要该 loop 的方法。
+
 ## 后续推进顺序
 
-EventLoopThreadPool、Socket 和 Acceptor 的当前最小实现与验证已完成。2026-10-21 决定将 TcpServer 当前进度保存为 WIP 阶段快照并暂缓，后续按以下顺序学习和完善；不表示已经授权直接实现所有后续模块：
+EventLoopThreadPool、Socket、Acceptor、Buffer 与 TcpConnection 的当前最小实现及专项验证已完成。TcpServer 在 2026-10-21 保存 WIP 快照后，于 2026-10-25 恢复整合并完成当前最小实现；后续路线不表示已经授权直接实现所有模块：
 
 1. Buffer 当前最小实现与专项验证已完成；后续按 TcpConnection 集成中的实际需求继续补充接口。
-2. TcpConnection 当前读写、关闭及调用方迁移的最小实现与验证已完成；后续明确构造失败时的 fd 交接责任，并在 TcpServer 整合中核对生命周期契约。
-3. 回到 TcpServer 整合完善：组织 Acceptor、线程池和连接集合，完成连接创建、移除、退出清理及线程归属约束。
-4. 补充端到端网络验证，再评估协程原型的复习、修正与整合。
+2. TcpConnection 当前读写、关闭、调用方迁移及 Server 接入异常交接已验证；后续按应用场景继续核对生命周期边界。
+3. TcpServer 接入、连接移除和退出清理已完成真实 TCP 验证；后续再决定是否迁移现有 echo 示例，以及是否增加显式停止、超时下线等接口。
+4. 结合实际应用补充协议与下线行为验证，再评估协程原型的复习、修正与整合。
 
 ### 网络层已知待办
 
-- TcpServer 的 newConnection、removeConnection、removeConnectionInLoop 和析构函数体仍为空。newConnection 尚未接管或关闭 Acceptor 交付的 fd，当前不能用于实际连接接入；启动时也尚未传递已配置的线程初始化回调。阶段提交仅保存学习进度，不代表可用服务端或通过完整构建的基线。
+- TcpServer 当前采用 baseLoop 线程中的同步析构，没有显式异步 stop 或超时强制退出接口；回调不能同步等待该 baseLoop，工作循环不能自行退出。业务层优雅下线与协议收尾由应用组织。
 - Acceptor 的 EMFILE 恢复策略待定，当前仅分类并记录日志，持续耗尽 fd 时可能反复触发监听事件；后续再讨论应急 fd 或暂停接入等方案。
-- TcpConnection 构造在 Socket 接管 fd 之前仍可能因空 loop、名称复制或内存分配失败而抛异常，原始 fd 的异常交接契约尚未统一；后续结合 TcpServer 的接入路径明确，当前不声称构造过程已全面实现异常安全。
-- TcpServer 尚未纳入当前测试和示例构建的实例化路径；现有测试和示例的构建及回归通过不表示 TcpServer 已可用，其 Option 到 Acceptor bool 参数的转换和连接管理仍待整合。
+- 调用方若仍将裸 fd 直接传给 make_shared，必须自行管理尚未进入构造函数的分配失败；推荐采用 Socket::adopt 与拥有 Socket 的连接构造，TcpServer 已使用此路径。
+- 现有 echo 示例仍直接组织 Acceptor 和 TcpConnection，TcpServer 通过独立测试接入真实 TCP；尚未扩展 IPv6、连接超时和异步停止等能力。
 
 ## 暂缓事项
 
@@ -147,10 +158,13 @@ EventLoopThreadPool、Socket 和 Acceptor 的当前最小实现与验证已完�
 
 ## 验证记录与文档分工
 
+- 2026-10-25 TcpServer 修复与验证：修正 Option 到 bool 的转换、析构日志和非标准头文件引用；完成初始化回调透传、一次启动与配置线程检查、默认消息消费。连接关闭任务移除引用捕获，并用存活标志保护排队的 Server 访问；析构先停止接入，确认工作 loop 清理及当前批次任务结束后再回收线程池。增加 Socket::adopt 与拥有 Socket 的连接构造，取消未建立连接时可直接析构；地址查询失败保存原始错误并抛出，不再返回未初始化地址。
+- 新增 [test_tcpserver.cpp](../tests/test_tcpserver.cpp) 与 [peer 翻译单元](../tests/test_tcpserver_peer.cpp)，注册 Debug/NDEBUG 两个目标，包含 9 组用例。真实本机临时端口验证零线程/两工作线程二进制 echo、轮询与回调线程归属、可选回调、活跃连接析构、析构后的关闭通知，以及受控阻塞工作队列下取消尚未执行的建立任务；故障注入验证启动失败、Socket 分配/名称复制/Channel 分配/连接构造前分配失败、回调复制失败、地址查询与 epoll 注册失败后的 fd 回收和后续接入，另检查重复启动、重入与错误线程拒绝。测试关键检查不依赖标准 assert。
+- 本轮测试和示例完整构建成功，29 项 CTest 全部通过；TcpServer 头文件独立、重复包含及测试源通过严格警告检查；TcpServer 专项通过 ASan/UBSan 与泄漏检测。同步析构仅在约定的线程和回调边界内验证，未扩展 Thread/EventLoopThread 既有异常策略、Acceptor EMFILE 恢复或异步停止。
 - 2026-10-24 Buffer writeFd 验证：扩展现有 test_buffer.cpp 与 peer 翻译单元，覆盖可读偏移和二进制数据、完整及空写入、消费后复用、真实管道部分写入与续写顺序、EAGAIN 后恢复、EBADF，以及注入 EINTR/EIO 后的数据保留和调用方重试。新增参数前置检查用例先在 Debug/NDEBUG 下复现缺陷，再补齐与 readFd 一致的 NETLIB_ASSERT，确认空错误码指针在写入 fd 前被拒绝。两个既有 Buffer 测试目标均通过，测试和示例完整构建成功，27 项回归全部通过；测试源通过严格警告检查，Buffer 专项通过 ASan/UBSan 及泄漏检测。
 - 2026-10-24 TcpConnection 独立测试重写：新增统一的 [test_tcpconnection.cpp](../tests/test_tcpconnection.cpp) 和 [peer 翻译单元](../tests/test_tcpconnection_peer.cpp)，注册 test_tcpconnection 与 test_tcpconnection_ndebug 两个目标，不恢复原先分散的临时专项文件。关键检查不依赖标准 assert；采用真实非阻塞 socketpair 和受限内核发送缓冲，仅对被测 fd 包装 readv、send、shutdown 以注入错误、短写并核对线程归属。
 - 新独立测试包含 14 组用例：构造元数据、可选回调及取消建立，二进制读取和时间戳、EOF 前数据保留，读取错误分类及原始错误码日志，三个发送重载、空消息与回调副本，跨线程消息及连接持有，部分写入与发送顺序、EINTR/EAGAIN 恢复，真实 EPIPE 与续发致命错误，默认 64 MiB 高水位通知，半关闭后继续接收与缓冲排空后 FIN，排队发送及过期关闭任务，同线程/跨线程强制关闭及优雅关闭升级，回调释放最后引用与 Channel tie，以及并发关闭后状态保持终止。
-- 本次仅新增独立测试及其 CMake/文档入口，未修改 TcpConnection 实现。测试和示例完整构建通过，当前 27 项 CTest 全部通过；两个测试源文件通过严格警告检查，独立测试另通过 ASan/UBSan 及泄漏检测。统一定向运行命令见 [AGENTS.md](../AGENTS.md)。
+- 本次仅新增独立测试及其 CMake/文档入口，未修改 TcpConnection 实现。测试和示例完整构建通过，当时 27 项 CTest 全部通过；两个测试源文件通过严格警告检查，独立测试另通过 ASan/UBSan 及泄漏检测。统一定向运行命令见 [AGENTS.md](../AGENTS.md)。
 - 2026-10-24 此前的临时专项清理：按用户要求删除 TcpConnection 读取、发送、生命周期及对应 peer 共 6 个临时 C++ 测试源码，同步移除 6 个 Debug/NDEBUG CTest 目标、运行命令及旧构建产物。当时保留 25 项 CTest，test_net 与 Channel 测试继续提供基础集成验证；此前专项结果仅作为历史记录，不再提供旧专项复跑入口。清理后测试及示例构建成功，25 项回归全部通过。
 - 2026-10-24 生命周期修复与完整回归：恢复可选连接回调判空，修复多字符日志字面量，补齐 shutdown 的 CAS 状态转换、过期任务检查和关闭写端去重，以及独立的排队 forceClose；connectDestroyed 在清理结束前持有连接，并支持取消尚未建立的连接。当时的生命周期临时专项覆盖 Debug、NDEBUG 和多翻译单元（源码现已移除），使用真实 socketpair、受限发送缓冲和 shutdown 调用观测，覆盖空回调、半关闭后继续收取、缓冲排空后 FIN、重复与过期关闭任务、排队发送的关闭边界、同线程/跨线程强制关闭及从优雅关闭升级、回调释放最后引用、Channel tie，以及并发 shutdown/forceClose 与最终清理。
 - 清理前的测试及 echo 示例完整构建通过，31 项 CTest 全部通过；TcpConnection 头文件独立、重复包含通过严格警告检查。生命周期专项通过 ASan/UBSan 及泄漏检测；echo 示例通过 127.0.0.1:8888 上三个连续 TCP 客户端的收发验证，包含二进制消息和 EOF 后连接清理。本轮未改变发送与关闭的边界，未扩展实现 TcpServer。
