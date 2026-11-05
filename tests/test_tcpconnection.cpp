@@ -36,7 +36,7 @@ struct IoProbe {
     std::vector<int> readErrors, sendErrors;
     size_t nextReadError = 0, nextSendError = 0;
     size_t shortSend = 0;
-    int reads = 0, shutdowns = 0;
+    int reads = 0, eofs = 0, shutdowns = 0;
     bool blockSends = false;
 };
 IoProbe io;
@@ -57,7 +57,10 @@ extern "C" ssize_t __wrap_readv(int fd, const iovec* vectors, int count) {
             return -1;
         }
     }
-    return __real_readv(fd, vectors, count);
+    const ssize_t result = __real_readv(fd, vectors, count);
+    if (fd == io.fd && result == 0)
+        ++io.eofs;
+    return result;
 }
 
 extern "C" ssize_t __real_send(int, const void*, size_t, int);
@@ -294,6 +297,8 @@ void test_read_binary_timestamp_and_eof() {
     f.loop.loop();
     check(received == payload && lifecycle == "UDC" && closed == 1 && io.reads >= 2,
           "EOF lost pending bytes or duplicated lifecycle callbacks");
+    check(io.shutdowns == 1 && receiveUntilEof(f.pair.peer(), 0).empty(),
+          "EOF did not send FIN while a connection reference remained alive");
     f.conn->connectDestroyed();
     f.conn->connectDestroyed();
     check(lifecycle == "UDC", "final cleanup duplicated down notification");
@@ -532,6 +537,90 @@ void test_graceful_shutdown_drains_output() {
           lifecycle == "UDC" && f.conn->disconnected(), "graceful shutdown lost data or lifecycle");
 }
 
+void test_peer_eof_drains_output() {
+    for (bool localShutdown : {false, true}) {
+        Fixture f;
+        std::string lifecycle, received;
+        int completed = 0;
+        f.conn->setConnectionCallback([&](const TcpConnectionPtr& c) {
+            lifecycle += c->connected() ? 'U' : 'D';
+        });
+        f.conn->setCloseCallback([&](const TcpConnectionPtr&) {
+            lifecycle += 'C';
+            f.loop.quit();
+        });
+        f.conn->setWriteCompleteCallback([&](const TcpConnectionPtr&) { ++completed; });
+        f.conn->connectEstablished();
+        const std::string payload = pattern(512 * 1024);
+        f.conn->send(payload); // 真实 SO_SNDBUF=4096，读端暂不消费，必然积压。
+        if (localShutdown)
+            f.conn->shutdown();
+        check(::shutdown(f.pair.peer(), SHUT_WR) == 0, "peer half-close failed");
+
+        std::thread peer;
+        f.loop.queueInLoop([&] {
+            check(io.eofs == 1 && !f.conn->connected() && !f.conn->disconnected() &&
+                  lifecycle == "U" && io.shutdowns == 0,
+                  "peer EOF closed before buffered output drained");
+            Buffer rejected;
+            rejected.append("late", 4);
+            f.conn->send(&rejected);
+            check(rejected.readableBytes() == 4, "peer EOF still accepted a new send");
+            const int reads = io.reads;
+            f.loop.queueInLoop([&, reads] {
+                check(io.reads == reads && io.eofs == 1,
+                      "peer EOF left read interest enabled");
+                peer = std::thread([&] {
+                    // 保留 f.conn 引用，验证 FIN 不依赖最后一个 shared_ptr 析构。
+                    received = receiveUntilEof(f.pair.peer(), payload.size());
+                });
+            });
+        });
+        f.loop.loop();
+        peer.join();
+        check(received == payload && lifecycle == "UDC" && completed == 1 &&
+              io.eofs == 1 && io.shutdowns == 1 && f.conn->disconnected(),
+              "peer EOF truncated output or duplicated completion/close notifications");
+    }
+}
+
+void test_peer_eof_abort_pending_output() {
+    for (bool force : {false, true}) {
+        Fixture f;
+        std::string lifecycle, received;
+        int completed = 0;
+        const std::weak_ptr<TcpConnection> weak = f.conn;
+        f.conn->setConnectionCallback([&](const TcpConnectionPtr& c) {
+            lifecycle += c->connected() ? 'U' : 'D';
+        });
+        f.conn->setWriteCompleteCallback([&](const TcpConnectionPtr&) { ++completed; });
+        f.conn->setCloseCallback([&](const TcpConnectionPtr& c) {
+            lifecycle += 'C';
+            c->connectDestroyed();
+            f.conn.reset();
+            f.loop.quit();
+        });
+        f.conn->connectEstablished();
+        const std::string payload = pattern(512 * 1024);
+        f.conn->send(payload);
+        check(::shutdown(f.pair.peer(), SHUT_WR) == 0, "peer half-close failed");
+        std::thread peer;
+        f.loop.queueInLoop([&] {
+            check(io.eofs == 1 && lifecycle == "U", "EOF did not defer pending output close");
+            if (force)
+                f.conn->forceClose();
+            else
+                io.sendErrors = {EPIPE};
+            peer = std::thread([&] { received = receiveUntilEof(f.pair.peer(), payload.size()); });
+        });
+        f.loop.loop();
+        peer.join();
+        check(lifecycle == "UDC" && completed == 0 && io.shutdowns == 0 &&
+              received.size() < payload.size() && weak.expired() && fdClosed(f.fd),
+              "EOF drain could not be aborted safely by forceClose or a write error");
+    }
+}
+
 void test_queued_send_and_stale_shutdown() {
     for (bool peerEof : {false, true}) {
         Fixture f;
@@ -544,8 +633,8 @@ void test_queued_send_and_stale_shutdown() {
         if (peerEof) {
             check(::shutdown(f.pair.peer(), SHUT_WR) == 0, "peer half-close failed");
             f.loop.loop(); // 先处理 EOF，再处理已排队的发送和 shutdown。
-            check(f.conn->disconnected() && closed == 1 && io.shutdowns == 0,
-                  "stale shutdown touched a disconnected socket");
+            check(f.conn->disconnected() && closed == 1 && io.shutdowns == 1,
+                  "EOF or stale shutdown duplicated the write shutdown");
         } else {
             f.runPending();
             char byte;
@@ -684,6 +773,8 @@ int main() {
         {"high_water_notification", test_high_water_notification},
         {"empty_shutdown_preserves_reading", test_empty_shutdown_preserves_reading},
         {"graceful_shutdown_drains_output", test_graceful_shutdown_drains_output},
+        {"peer_eof_drains_output", test_peer_eof_drains_output},
+        {"peer_eof_abort_pending_output", test_peer_eof_abort_pending_output},
         {"queued_send_and_stale_shutdown", test_queued_send_and_stale_shutdown},
         {"force_close_discards_pending_output", test_force_close_discards_pending_output},
         {"callbacks_release_last_owner", test_callbacks_release_last_owner},

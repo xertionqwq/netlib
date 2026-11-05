@@ -69,6 +69,10 @@ public:
         events_ |= kWritEvent;
         update();
     }
+    void disableReading() {
+        events_ &= ~kReadEvent;
+        update();
+    }
     void disableWriting() {
         events_ &= ~kWritEvent;
         update();

@@ -132,7 +132,7 @@ private:
     EventLoop *loop_; // 连接所属的 I/O loop, 零工作线程时可以为 baseLoop
     const std::string name_;
     std::atomic<StateE> state_; // 当前连接的状态, 原子变量
-    bool reading_;
+    bool reading_; // 所属 loop 线程访问；收到 EOF 后关闭读事件，继续排空已有输出
     bool writeShutdown_; // 仅在所属 loop 线程访问，记录是否已请求关闭写端
 
     // 这里与 Acceptor 类似     Acceptor -> mainLoop
@@ -184,9 +184,8 @@ inline TcpConnection::TcpConnection(EventLoop *loop,
     // 给 channel 设置相应的回调函数
     // poller 通知 channel 感兴趣的事件发生了
     // EventLoop 内 channel 执行 handleEvent()
-    channel_->setReadCallback(
-        std::bind(&TcpConnection::handleRead, this, std::placeholders::_1)
-    );
+    channel_->setReadCallback([this](Timestamp time)
+                              { handleRead(time); });
     channel_->setWriteCallback([this]
                                { handleWrite(); });
     channel_->setCloseCallback([this]
@@ -211,14 +210,20 @@ inline TcpConnection::~TcpConnection() {
 
 inline void TcpConnection::handleRead(Timestamp receiveTime) {
     loop_->assertInLoopThread();
+    if (!reading_ || state_ == StateE::kDisconnected)
+        return;
     int savedErrno = 0;
     auto n = inputBuf_.readFd(channel_->fd(), &savedErrno);
     if (n > 0) { // 有数据可读
         if (messageCallback_) // 已建立连接的用户有可读事件发生了, 调用用户传入的回调操作 onMessage
             messageCallback_(shared_from_this(), &inputBuf_, receiveTime);
     }
-    else if (n == 0) { // 客户端断开
-        handleClose();
+    else if (n == 0) { // 对端关闭写端：停止读入，排空已有输出后完成关闭。
+        reading_ = false;
+        channel_->disableReading();
+        StateE expected = StateE::kConnected;
+        state_.compare_exchange_strong(expected, StateE::kDisconnecting);
+        shutdownInLoop();
     }
     else {
         // LT 模式下仍有数据时会再次通知；暂时不可读或被信号中断不关闭连接。
@@ -278,6 +283,7 @@ inline void TcpConnection::handleClose() {
     // assert(state_ == StateE::kConnected);
     channel_->disableAll(); // 取消感兴趣事件
     channel_->remove(); // 从 poller 上注销
+    reading_ = false;
     setState(StateE::kDisconnected);
     TcpConnectionPtr connPtr(shared_from_this()); // 试着延长对象生命
     // 如果注册过相关回调, 则执行
@@ -421,10 +427,15 @@ inline void TcpConnection::shutdown() {
 inline void TcpConnection::shutdownInLoop() {
     loop_->assertInLoopThread();
     // 排队期间可能已断开；续发完成与排队的 shutdown 也可能先后到达这里。
-    if (state_ == StateE::kDisconnecting && !writeShutdown_ &&
+    if (state_ == StateE::kDisconnecting &&
         !channel_->isWriting() && outputBuf_.readableBytes() == 0) {
-        writeShutdown_ = true;
-        socket_->shutdownWrite();
+        if (!writeShutdown_) {
+            writeShutdown_ = true;
+            socket_->shutdownWrite();
+        }
+        // 对端已 EOF 时无需继续等待读取；先发送 FIN，外部引用仍可延迟 fd 析构。
+        if (!reading_)
+            handleClose();
     }
 }
 
