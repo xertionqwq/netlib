@@ -40,6 +40,8 @@ public:
     ~TcpServer();
 
     const std::string &ipPort() const { return ipPort_; }
+    // ipPort() 保留构造配置；此接口查询实际绑定地址，仅在 baseLoop 线程调用。
+    InetAddress listenAddress() const { return acceptor_->listenAddress(); }
     const std::string &name() const { return name_; }
     EventLoop *getLoop() const { return loop_; }
 

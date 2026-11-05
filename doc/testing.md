@@ -15,7 +15,32 @@ scripts/test.sh --help
 
 `-R` 按 CTest 测试名称筛选，未匹配任何测试时返回失败。`--timeout` 设置 CTest 默认超时秒数，默认 30；现有用例自身的 `TIMEOUT` 属性优先。
 
-当前主构建登记 29 项测试，含已有 `_ndebug` 专项目标。脚本固定使用 Debug，不将协程原型视为已通过 Release 回归；模块状态与暂缓事项见 [项目进度](progress.md)。
+同时启用测试与示例时，当前主构建登记 32 项测试，含已有 `_ndebug` 专项目标；关闭示例时为 31 项，不登记子进程测试。脚本固定使用 Debug，不将协程原型视为已通过 Release 回归；模块状态与暂缓事项见 [项目进度](progress.md)。
+
+## 回声示例与当前专项验证
+
+```sh
+build/echo_server --help
+build/echo_server --port 0 --threads 3
+scripts/test.sh -R '^test_(tcpconnection|tcpserver|echo_support)(_ndebug)?$'
+scripts/test.sh -R '^test_echo_process$'
+```
+
+示例默认端口为 12300、工作线程为 3，`--threads 0` 使用主循环处理连接。`--port 0` 请求临时端口；监听及工作线程初始化完成后，stdout 输出并刷新 `READY 0.0.0.0:<实际端口>`。客户端连接 127.0.0.1 和该端口即可，可使用 `nc` 进行持续回声验证。日志输出到 stderr；示例按字节回显，不解析 UTF-8 或 Telnet 协议。参数错误返回 2，`--help` 返回 0。
+
+Ctrl+C 或 SIGTERM 经 signalfd 转为主循环事件，调用 quit，退出事件分发后清理监听、连接、工作线程及信号 Channel，最后 stdout 输出并刷新 `STOPPED`、返回 0。这是正常资源清理入口；TcpServer 析构仍按强制清理处理，不保证排空活动连接的待发数据。连接正常收到对端 EOF 时则先排空已有输出、发送 FIN，再通知关闭。
+
+[test_echo_support.cpp](../tests/test_echo_support.cpp) 直接复用 [echo_server.h](../examples/echo_server.h)，登记 Debug/NDEBUG 两个目标，不要求启用示例构建。覆盖参数拒绝、实际临时端口及 READY 刷新、零/单/三个工作线程、持续中文回显、4 MiB 二进制慢读后半关闭、SIGINT 空闲退出及 SIGTERM 活动连接清理；并检查 fd/线程数、信号屏蔽字恢复及信号初始化失败的回收。背压测试限制实际内核发送缓冲，记录系统调用以确认完整输入、EOF 和积压后再开始读回声，未伪造成功发送。
+
+上述支持测试在同一进程内组合示例类与 EventLoop；TcpConnection 原有专项另覆盖 EOF 排空期间强制关闭和写错误、本端先 shutdown、重复 EOF 防护与 FIN 去重。
+
+[test_echo_process.cpp](../tests/test_echo_process.cpp) 是正式程序的子进程驱动，只在 `NETLIB_BUILD_TESTS=ON` 和 `NETLIB_BUILD_EXAMPLES=ON` 时构建及登记。构建该测试目标会先构建 echo_server，CTest 通过 `$<TARGET_FILE:echo_server>` 传递实际可执行文件路径，支持构建目录含空格。已有 scripts/test.sh 同时开启这两个选项，无需另设入口。
+
+驱动使用 posix_spawn 启动正式 echo_server，不调用 EchoServer 类或包装服务端系统调用。每次使用端口 0，等待 stdout 的 READY 后连接回环地址；验证 --help 返回 0、四组非法参数返回 2，以及零/单/三个工作线程的实际线程数量。网络场景包含同连接 10 轮中文与 emoji、受控分批发送、2 MiB 全双工回显、8 个并发连接和 8 MiB 暂缓读取后半关闭。数据按累计字节核对，不依赖 TCP 分段；精确的内部背压观测仍由进程内支持测试负责。
+
+每种线程配置分别验证 SIGINT 空闲停止和 SIGTERM 下 9 个活动连接的清理，要求完整 STOPPED 通知、正常返回 0、客户端收到 EOF，并使用 waitpid 回收进程。父进程在连接和收发等待期间同步消费 stdout/stderr，stdout 限 8 KiB、stderr 仅保留末尾 64 KiB，避免日志管道写满或无界占用内存。失败时输出当前场景、子进程状态和输出尾部。
+
+启动和退出各限 3 秒、每组收发限 6 秒，并共享整套用例 20 秒的总期限。异常路径先发送 SIGTERM，最多等待 500 毫秒，再按需 SIGKILL 并 waitpid；只操作本驱动持有的子进程 PID。CTest 的 30 秒超时作为外层兜底，内部期限为清理留出余量。该测试可以单独在 Release 下构建 echo_server 与 test_echo_process 验证，不代表其他学习原型已通过 Release。
 
 ## 安装与独立使用方验证
 

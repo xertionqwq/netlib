@@ -6,6 +6,8 @@
 
 当前优先沿 muduo 路线学习和完善 Reactor 网络库，逐步补齐线程封装、连接接入和服务端组织。协程相关代码已有学习原型，后续再讨论与网络层整合，不要求当前按旧的四阶段协程迁移顺序推进。
 
+muduo 整体回顾已完成，笔记维护在 [mymuduo.md](learning-log/mymuduo.md)。当前已回到原对话，在 TcpServer 之上验证最小回声示例，继续明确回显与关闭语义；后续讨论 README 撰写并整理 Reactor 相关收尾事项。
+
 项目使用 C++17、Linux/POSIX 接口，无第三方库依赖。目标保持 header-only；现有学习原型仍需逐步审查，不能视为全部完成工程化。
 
 ## 模块状态
@@ -32,7 +34,7 @@
 
 Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epoll 的具体封装。Poller 保存 Channel 借用指针，不负责释放 Channel 或关闭其 fd。
 
-网络层共用的连接与回调别名统一在 `include/netlib/Callbacks.h` 的 `netlib` 命名空间声明，通过前置声明引用 TcpConnection、Buffer 和 Timestamp。MessageCallback 使用 `const TcpConnectionPtr &`、`Buffer *`、`Timestamp` 三参形式；测试和 echo 示例已迁移到当前构造函数及回调接口，测试和示例的完整构建已恢复。echo 示例在 EOF 后排队移除连接，释放最后一个引用后由 Socket 关闭 fd。
+网络层共用的连接与回调别名统一在 `include/netlib/Callbacks.h` 的 `netlib` 命名空间声明，通过前置声明引用 TcpConnection、Buffer 和 Timestamp。MessageCallback 使用 `const TcpConnectionPtr &`、`Buffer *`、`Timestamp` 三参形式；测试和示例已迁移到当前接口。echo 示例通过 EchoServer 包装 TcpServer，默认监听 12300 端口并配置三个工作线程，支持 --port、--threads 和 --help。消息回调仅负责原样回显，连接移除与清理由 TcpServer 组织。对端 EOF 后排空积压输出；启动后刷新 READY 及实际监听地址，SIGINT/SIGTERM 经 signalfd 请求主循环退出，析构完成后输出 STOPPED。进程内测试覆盖精确背压和资源回收，test_echo_process 另启动正式可执行程序，覆盖 main、参数退出码、真实输出管道、TCP 回声、信号退出及父进程超时回收，已接入现有日常回归入口。
 
 ## 已确定的线程方案
 
@@ -97,7 +99,7 @@ Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epo
 - `listen()` 在内核监听和 Channel 注册均成功后设置 listening 状态，重复调用直接返回。注册失败时状态保持 false，可重试或销毁；此时内核 socket 可能已经处于监听状态。
 - 新连接回调按值接收。调用回调时转交 fd 所有权，由回调负责接管和异常清理；对端地址引用仅在本次调用期间有效。Acceptor 不在回调抛异常后无条件 close，以免关闭已转交或复用的 fd；未设置回调时直接关闭连接 fd。
 - 当前采用 LT 模式，每次读就绪接收一个连接。EAGAIN/EWOULDBLOCK 和 EINTR 直接返回；其他错误记录立即保存的 errno，EMFILE 额外标记 fd 耗尽，但尚未提供耗尽恢复。
-- 析构先禁用并移除监听 Channel，再由 Socket 析构关闭监听 fd。echo 示例在设置回调后显式调用 listen。
+- 析构先禁用并移除监听 Channel，再由 Socket 析构关闭监听 fd。echo 示例通过 TcpServer::start 组织监听。Acceptor 与 TcpServer 的 listenAddress() 在所属 baseLoop 线程查询内核实际绑定地址，支持获取端口 0 分配的临时端口；TcpServer::ipPort() 仍保留构造时的配置字符串。
 
 ## TcpConnection 已确定的读取错误处理
 
@@ -141,15 +143,16 @@ Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epo
 - 当前尚未定义发布版本，不生成版本兼容性配置；安装方式与独立项目接入命令见 [install.md](install.md)。
 - scripts/test.sh 提供 Debug 配置、测试/示例构建和 CTest 回归，支持构建目录、并行数、测试名称筛选与默认超时；空筛选结果返回失败。
 - scripts/test_install.sh 使用独占临时目录，验证标准与自定义安装布局、前缀迁移，以及独立使用方的 Debug/Release 构建运行；成功后清理，失败或指定 --keep 时保留现场。使用方源码维护在 tests/install_consumer/，仅链接 netlib::netlib，验证多翻译单元、C++17 传递、Buffer 和工作线程任务；不增加主项目的 CTest 数量。脚本说明见 [testing.md](testing.md)。
+- echo 示例已迁移到 TcpServer，当前继续验证回显与关闭行为；README 按后续安排推进。安装与脚本能力不改变协程原型的模块状态。
 
 ## 后续推进顺序
 
 EventLoopThreadPool、Socket、Acceptor、Buffer 与 TcpConnection 的当前最小实现及专项验证已完成。TcpServer 在 2026-10-21 保存 WIP 快照后，于 2026-10-25 恢复整合并完成当前最小实现；后续路线不表示已经授权直接实现所有模块：
 
-1. Buffer 当前最小实现与专项验证已完成；后续按 TcpConnection 集成中的实际需求继续补充接口。
-2. TcpConnection 当前读写、关闭、调用方迁移及 Server 接入异常交接已验证；后续按应用场景继续核对生命周期边界。
-3. TcpServer 接入、连接移除和退出清理已完成真实 TCP 验证；后续再决定是否迁移现有 echo 示例，以及是否增加显式停止、超时下线等接口。
-4. 结合实际应用补充协议与下线行为验证，再评估协程原型的复习、修正与整合。
+1. muduo 整体回顾已完成，类职责、资源生命周期、模块交互与设计原因见 [mymuduo.md](learning-log/mymuduo.md)，后续结合实际使用继续核对实现差异。
+2. 当前 echo 已完成对端 EOF 排空修复、配置参数、就绪通知与信号正常退出，进程内和正式子进程回归均已接入 CTest 与 scripts/test.sh。后续结合使用补充场景；客户端手动验证使用原始 TCP 或 nc，避免 Telnet 的控制字符处理影响字节流。
+3. 结合已验证的构建、安装、测试脚本与示例，讨论并撰写 README，说明当前能力、使用方法和实现边界。
+4. 整理 muduo/Reactor 学习与实现的其他收尾事项，逐项确认处理范围；显式停止、超时下线及协程整合等方向仍需单独讨论，不因本次安排自动启动。
 
 ### 网络层已知待办
 
@@ -157,7 +160,8 @@ EventLoopThreadPool、Socket、Acceptor、Buffer 与 TcpConnection 的当前最�
 - Acceptor 的 EMFILE 恢复策略待定，当前仅分类并记录日志，持续耗尽 fd 时可能反复触发监听事件；后续再讨论应急 fd 或暂停接入等方案。
 - 调用方若仍将裸 fd 直接传给 make_shared，必须自行管理尚未进入构造函数的分配失败；推荐采用 Socket::adopt 与拥有 Socket 的连接构造，TcpServer 已使用此路径。
 - TcpConnection 对端 EOF 的积压输出已改为排空后关闭；若对端停止读取，仍可能长期等待，没有排空超时，可由应用请求 forceClose。
-- 现有 echo 示例仍直接组织 Acceptor 和 TcpConnection，TcpServer 通过独立测试接入真实 TCP；尚未扩展 IPv6、连接超时和异步停止等能力。
+- echo 已支持配置、READY 和 SIGINT/SIGTERM 正常析构，相关支持代码位于 examples/echo_server.h，不安装为公共 API。正式子进程回归已覆盖 main、退出码和输出管道；应用空闲超时仍未实现。信号停止会直接进入 TcpServer 析构清理，不承诺排空活动连接的业务输出。
+- IPv6、连接超时和异步停止等能力尚未扩展。
 
 ## 暂缓事项
 
@@ -169,7 +173,17 @@ EventLoopThreadPool、Socket、Acceptor、Buffer 与 TcpConnection 的当前最�
 
 ## 验证记录与文档分工
 
-- 2026-11-05 TcpConnection 对端 EOF 排空修复：在既有 TcpConnection 测试中先复现 Debug/NDEBUG 的 EOF 提前关闭，再修复为停止读取、排空输出、一次 FIN 和一次关闭通知。新增两组用例覆盖本端先 shutdown、EOF 不重复读取、拒绝新 Buffer 发送、保留外部引用时仍收到 FIN，以及排空期间 forceClose/EPIPE 的回收；专项现为 16 组。
+- 2026-11-05 正式 echo_server 子进程回归：新增 [test_echo_process.cpp](../tests/test_echo_process.cpp)，通过 posix_spawn 启动正式程序，以真实 stdout/stderr 管道等待 READY、记录有界日志，并用普通 TCP 客户端核对回声。覆盖 --help 与四组非法参数退出码、0/1/3 个工作线程实际生效、同连接 10 轮中文与 emoji、受控分批、2 MiB 双向收发、8 个并发客户端、8 MiB 暂缓读取后半关闭及后续持续服务。每种线程配置分别检查 SIGINT 空闲退出、SIGTERM 清理 9 个活动连接、STOPPED、返回 0 和 waitpid 回收；未改变服务端业务实现。
+- CMake 在测试与示例同时启用时登记 test_echo_process，并设置到正式 echo_server 目标的构建依赖与路径传递。通过 scripts/test.sh 完成完整构建及 32/32 项 Debug 回归；临时含空格路径的独立 Release 构建只构建这两个目标，其专项也通过，确认两者启用 NDEBUG，不扩大为协程原型 Release 验证。关闭示例时不登记该项，保留原有进程内测试。
+- 驱动通过严格警告检查及 ASan/UBSan、泄漏检查。另使用临时受控程序完成 9 项检查：提前退出、缺失 READY、错误 READY、停止超时、缺失 STOPPED、错误回声、每次启动 2 MiB stderr 洪泛、不存在的可执行路径和关闭父进程 stdin；异常正确返回失败，需要时实际走到 SIGKILL 回收，各次结束无残留 PID。临时验证程序不成为项目运行依赖。驱动提供阶段截止时间与总期限，失败后先 SIGTERM、最多等 500 毫秒，再按需 SIGKILL 并 waitpid；日常入口与边界见 [testing.md](testing.md)。
+- 2026-11-05 echo 第一至三项完善：在既有 TcpConnection 测试中先复现 Debug/NDEBUG 的 EOF 提前关闭，再修复为停止读取、排空输出、一次 FIN 和一次关闭通知。新增两组用例覆盖本端先 shutdown、EOF 不重复读取、拒绝新 Buffer 发送、保留外部引用时仍收到 FIN，以及排空期间 forceClose/EPIPE 的回收；专项现为 16 组。TcpServer 原测试补充内核实际临时端口查询验证。
+- 新增 test_echo_support 与 test_echo_support_ndebug，复用示例专用头文件，不启动正式 echo_server 子进程。真实回环临时端口覆盖零/单/三个工作线程的持续中文回声及 4 MiB 二进制慢读半关闭；SO_SNDBUF 限为 4096，确认服务端已读到完整输入和 EOF、出现短写或 EAGAIN 且仍有输出积压后，客户端才开始接收，最终字节一致。另验证 READY 刷新、SIGINT 就绪后进入循环前停止、SIGTERM 活动连接清理、fd/线程数和信号屏蔽字恢复，以及 signalfd 创建/epoll 注册失败的错误交接和回收。
+- 本轮测试及正式示例完整构建成功，31 项 CTest 全部通过；改动测试源与示例通过 -Wall -Wextra -Wpedantic -Werror 检查，TcpConnection 与 echo 支持测试通过 ASan/UBSan 和泄漏检查，文档相对链接通过核对。正式 main 的 --help 已手动检查；子进程启动、标准输出管道、退出码与超时回收尚未建立自动驱动，留待下一步讨论。
+- 2026-11-04 echo 剩余场景验证：实际可执行程序通过同连接 30 轮与受控分片、2 MiB 全双工原样收发、16 个客户端各 4 轮并发、小消息立即半关闭和 500 次连接回收。另进行 15 秒有界稳定性观察，新增 582 次连接，fd 峰值 14、结束恢复基线 12，RSS 本次保持 5148 KiB；覆盖范围为本次短时观察。
+- 临时受控启动器沿用当前 EchoServer 回调源码，仅将线程数配置参数化，使用临时端口、控制管道与系统调用记录；在零/单/三个工作线程下，确认 2 MiB 回显、并发、500 次连接回收及 4 MiB 慢读均正确。限制服务端 SO_SNDBUF 为 4096，慢读前约 4 MiB 输出积压，实际观察到短写及 EAGAIN，恢复读取后字节一致；输出积压时 RST 后仍能接入新连接。受控调用 loop.quit 后，四个活动客户端均收到 EOF，析构链完成且进程返回 0；这不构成正式示例已有停止接口的验证。
+- 大消息立即半关闭复现：上述零/单/三个工作线程均已读取完整 4 MiB，但只回显 137564、135316、121632 字节，余量尚未交给内核就因 EOF 清理被丢弃。原始程序未调整发送缓冲配置时，8 MiB 发送后立即半关闭、接收端暂缓读取，本次也仅收到 786268 字节，后续新连接仍正常；截断长度取决于运行时缓冲状态。本轮共记录 30 项成功、4 项 EOF 截断复现及 1 项正式示例缺退出入口，业务实现保持本轮测试前版本。既有 TcpConnection/TcpServer 的 Debug/NDEBUG 四项 CTest 均通过，说明当前回归尚未要求 EOF 后输出排空；自动入口及该场景的验收语义待讨论。
+- 2026-11-04 中文回声定位：在取消消息回调自动 shutdown 的当前示例上，原始 TCP 同连接连续发送“难过”“先人”、中文与 emoji、含 CR/LF 的文本，以及两个词各自逐字节发送并读取，共 7 组均保持字节一致。“难过”的 UTF-8 为 e9 9a be e8 bf 87，“先人”为 e5 85 88 e4 ba ba。通过受控伪终端和只转发字节的 TCP 中继复现本机 GNU inetutils telnet 2.7 的异常：Telnet 发出前已将“难过”中的 9a 替换为包含 IAC SUSP 的控制序列，并将“先人”中的 85 丢弃；服务端回传与实际收到的数据一致。普通模式及 -8 均复现该行为，属于客户端本地控制字符/协议处理；使用 nc 127.0.0.1 12300 后，两个词在同连接上回显一致。本轮中文测试不要求服务器按字符解析 UTF-8，网络层继续按字节传输；此前大数据、背压及应用正常退出仍需单独复测。
+- 2026-11-04 echo 示例真实 TCP 验证：重新构建 echo_server，单独启动该可执行程序，在 127.0.0.1:12300 测试，运行时观察到一个主线程和三个工作线程。含 CR/LF 的文本、512 字节二进制、16 个并发小消息客户端及小消息发送后半关闭均回显一致；20 次 RST 断开与 100 次空连接后仍可正常接入，进程 fd 数从基线 12 恢复到 12。同连接第二轮发送 10 字节却收到 0 字节；将 hello world 换行分为两批、收到前批回声后再发后批，后 6 字节未回显；客户端不主动半关闭时，2 MiB 数据本次仅收到首段 14,480 字节，该数值取决于实际 TCP 分段。三项均与 onMessage 发送后立即 shutdown 的行为一致。本次使用临时客户端验证，未修改示例实现或新增 CTest 目标；测试结束通过 SIGTERM 回收自有进程，未验证应用层正常退出清理。慢速接收、大消息立即半关闭、零/单工作线程及长期资源稳定性仍待后续覆盖。
 - 2026-10-26 测试脚本与独立使用方：新增 scripts/test.sh、scripts/test_install.sh 及 tests/install_consumer/，日常脚本的测试/示例构建与现有 29 项回归全部通过；从其他目录调用并使用相对构建路径、筛选 Buffer 两项测试也通过。安装脚本在含空格的临时路径中，验证标准/自定义布局迁移后的四组 Debug/Release 使用方，覆盖 CMAKE_PREFIX_PATH 与 netlib_DIR 两种查找方式、多翻译单元、C++17/NDEBUG、二进制缓冲与工作线程任务；检查成功清理、--keep、超时传递和 DESTDIR 隔离。另通过 22 项受控参数、空筛选、命令退出码与失败现场保留检查，并用真实 CTest 确认空筛选返回失败；脚本通过 bash -n，使用方源码通过严格警告语法检查。独立使用方不计入主项目 29 项 CTest，说明见 [testing.md](testing.md)。
 - 2026-10-26 CMake 安装与导出验证：新增 netlib::netlib、构建/安装头文件路径区分、线程依赖传递及可迁移包配置；测试和示例构建成功，现有 29 项 CTest 全部通过。临时独立项目仅链接该 target，覆盖安装后接入与 add_subdirectory 接入、两个翻译单元共享 EventLoop 状态、二进制 Buffer 操作和真实工作线程任务；使用方从 C++11 设置自动提升到 C++17。安装的 22 个头文件与源码一致，两个 CMake 文件不含仓库或构建目录路径；迁移含空格的安装前缀后，独立项目 Debug/Release 均编译运行通过，自定义 headers/lib64 布局也验证通过。本次环境为 CMake 4.2.3、GNU C++ 15.2.0；独立项目的 Release 结果仅覆盖所用 Reactor 接口，不代表协程原型已通过 Release 验证。该阶段使用临时验证项目，后续脚本验证见本节记录。
 - 2026-10-25 TcpServer 修复与验证：修正 Option 到 bool 的转换、析构日志和非标准头文件引用；完成初始化回调透传、一次启动与配置线程检查、默认消息消费。连接关闭任务移除引用捕获，并用存活标志保护排队的 Server 访问；析构先停止接入，确认工作 loop 清理及当前批次任务结束后再回收线程池。增加 Socket::adopt 与拥有 Socket 的连接构造，取消未建立连接时可直接析构；地址查询失败保存原始错误并抛出，不再返回未初始化地址。

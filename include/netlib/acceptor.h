@@ -44,6 +44,11 @@ public:
         loop_->assertInLoopThread();
         return listening_;
     }
+    // 返回内核实际绑定的地址，包含请求端口 0 时分配的临时端口。
+    InetAddress listenAddress() const {
+        loop_->assertInLoopThread();
+        return InetAddress(Socket::getLocalAddr(acceptSocket_.fd()));
+    }
 
     static int createNonblockingOrDie();
 private:

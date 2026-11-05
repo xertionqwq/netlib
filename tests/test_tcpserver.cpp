@@ -215,6 +215,10 @@ void test_configuration_and_startup() {
         EventLoop loop;
         auto server = makeServerInOtherTranslationUnit(&loop, option);
         const int listener = listenerFd.load();
+        const auto bound = server->listenAddress();
+        check(bound.port() != 0 && bound.toIpPort() ==
+              InetAddress(Socket::getLocalAddr(listener)).toIpPort(),
+              "server did not expose its actual ephemeral listening address");
         int reuse = -1;
         socklen_t length = sizeof reuse;
         check(::getsockopt(listener, SOL_SOCKET, SO_REUSEPORT, &reuse, &length) == 0 &&
