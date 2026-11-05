@@ -4,9 +4,37 @@ project(netlib LANGUAGES CXX)
 # netlib — header-only epoll + reactor network library
 # C++17, zero dependencies beyond the STL
 
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+find_package(Threads REQUIRED)
+
 add_library(netlib INTERFACE)
-target_include_directories(netlib INTERFACE include)
+add_library(netlib::netlib ALIAS netlib)
+target_include_directories(netlib INTERFACE
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 target_compile_features(netlib INTERFACE cxx_std_17)
+target_link_libraries(netlib INTERFACE Threads::Threads)
+
+# 安装公共头文件与可迁移的 CMake 包，供 find_package(netlib CONFIG) 使用。
+set(netlib_install_cmakedir "${CMAKE_INSTALL_LIBDIR}/cmake/netlib")
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/netlibConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/netlibConfig.cmake"
+    INSTALL_DESTINATION "${netlib_install_cmakedir}")
+
+install(TARGETS netlib EXPORT netlibTargets)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/netlib"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    FILES_MATCHING PATTERN "*.h")
+install(EXPORT netlibTargets
+    FILE netlibTargets.cmake
+    NAMESPACE netlib::
+    DESTINATION "${netlib_install_cmakedir}")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/netlibConfig.cmake"
+    DESTINATION "${netlib_install_cmakedir}")
 
 option(NETLIB_BUILD_EXAMPLES "Build example programs" OFF)
 option(NETLIB_BUILD_TESTS "Build tests" OFF)

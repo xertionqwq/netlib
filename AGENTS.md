@@ -48,6 +48,10 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure --timeout 30
 ```
 
+安装与外部项目接入方式见 [doc/install.md](doc/install.md)。安装验证使用独立项目，仅链接 `netlib::netlib`，核对多翻译单元、C++17 与线程依赖传递，以及安装前缀迁移。
+
+脚本入口为 `scripts/test.sh`（Debug 回归）和 `scripts/test_install.sh`（临时安装与独立使用方验证），选项与失败现场说明见 [doc/testing.md](doc/testing.md)。安装使用方独立构建，不计入主项目的 CTest 数量。
+
 常用定向验证：
 
 ```sh

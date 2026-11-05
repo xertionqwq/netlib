@@ -1,6 +1,6 @@
 # 项目进度
 
-更新日期：2026-10-25。
+更新日期：2026-11-05。
 
 ## 当前方向
 
@@ -132,6 +132,15 @@ Poller 的具体后端与基类已经分离，不再将 `poller.h` 描述为 epo
 - 析构必须在 baseLoop 线程、事件分发之外执行。先使存活标志失效并销毁 Acceptor，再清理 baseLoop 上的连接，并向每个工作 loop 提交连接清理和下一轮队列确认任务；即使该 loop 的连接已经移表，也等待此前的清理与本批回调结束。完成确认后释放连接表引用，再停止和回收线程池。工作 loop 不得自行退出，否则无法完成同步清理。
 - Server 析构按强制清理处理，不保证待发送缓冲排空；需要优雅下线时由应用先完成连接层 shutdown 和业务收尾。外部共享引用仍决定 fd 最终释放时机；Server 销毁后不能继续使用其工作 loop 借用指针，也不能再对保留的已断开连接调用需要该 loop 的方法。
 
+## 已确定的构建与安装方式
+
+- 保持 header-only，CMake 提供 INTERFACE target `netlib` 及别名 `netlib::netlib`；使用方可通过 add_subdirectory 接入源码，或在安装后使用 find_package(netlib CONFIG REQUIRED)。
+- target 统一传递 C++17、头文件路径和 Threads::Threads；包配置通过 find_dependency(Threads) 查找使用方环境中的线程依赖。
+- 安装公共头文件、netlibConfig.cmake 与 netlibTargets.cmake；目录布局遵循 GNUInstallDirs。使用相对安装目录时，导出配置引用安装前缀，不依赖原仓库或构建目录，可整体迁移安装目录。
+- 当前尚未定义发布版本，不生成版本兼容性配置；安装方式与独立项目接入命令见 [install.md](install.md)。
+- scripts/test.sh 提供 Debug 配置、测试/示例构建和 CTest 回归，支持构建目录、并行数、测试名称筛选与默认超时；空筛选结果返回失败。
+- scripts/test_install.sh 使用独占临时目录，验证标准与自定义安装布局、前缀迁移，以及独立使用方的 Debug/Release 构建运行；成功后清理，失败或指定 --keep 时保留现场。使用方源码维护在 tests/install_consumer/，仅链接 netlib::netlib，验证多翻译单元、C++17 传递、Buffer 和工作线程任务；不增加主项目的 CTest 数量。脚本说明见 [testing.md](testing.md)。
+
 ## 后续推进顺序
 
 EventLoopThreadPool、Socket、Acceptor、Buffer 与 TcpConnection 的当前最小实现及专项验证已完成。TcpServer 在 2026-10-21 保存 WIP 快照后，于 2026-10-25 恢复整合并完成当前最小实现；后续路线不表示已经授权直接实现所有模块：
@@ -158,6 +167,8 @@ EventLoopThreadPool、Socket、Acceptor、Buffer 与 TcpConnection 的当前最�
 
 ## 验证记录与文档分工
 
+- 2026-10-26 测试脚本与独立使用方：新增 scripts/test.sh、scripts/test_install.sh 及 tests/install_consumer/，日常脚本的测试/示例构建与现有 29 项回归全部通过；从其他目录调用并使用相对构建路径、筛选 Buffer 两项测试也通过。安装脚本在含空格的临时路径中，验证标准/自定义布局迁移后的四组 Debug/Release 使用方，覆盖 CMAKE_PREFIX_PATH 与 netlib_DIR 两种查找方式、多翻译单元、C++17/NDEBUG、二进制缓冲与工作线程任务；检查成功清理、--keep、超时传递和 DESTDIR 隔离。另通过 22 项受控参数、空筛选、命令退出码与失败现场保留检查，并用真实 CTest 确认空筛选返回失败；脚本通过 bash -n，使用方源码通过严格警告语法检查。独立使用方不计入主项目 29 项 CTest，说明见 [testing.md](testing.md)。
+- 2026-10-26 CMake 安装与导出验证：新增 netlib::netlib、构建/安装头文件路径区分、线程依赖传递及可迁移包配置；测试和示例构建成功，现有 29 项 CTest 全部通过。临时独立项目仅链接该 target，覆盖安装后接入与 add_subdirectory 接入、两个翻译单元共享 EventLoop 状态、二进制 Buffer 操作和真实工作线程任务；使用方从 C++11 设置自动提升到 C++17。安装的 22 个头文件与源码一致，两个 CMake 文件不含仓库或构建目录路径；迁移含空格的安装前缀后，独立项目 Debug/Release 均编译运行通过，自定义 headers/lib64 布局也验证通过。本次环境为 CMake 4.2.3、GNU C++ 15.2.0；独立项目的 Release 结果仅覆盖所用 Reactor 接口，不代表协程原型已通过 Release 验证。该阶段使用临时验证项目，后续脚本验证见本节记录。
 - 2026-10-25 TcpServer 修复与验证：修正 Option 到 bool 的转换、析构日志和非标准头文件引用；完成初始化回调透传、一次启动与配置线程检查、默认消息消费。连接关闭任务移除引用捕获，并用存活标志保护排队的 Server 访问；析构先停止接入，确认工作 loop 清理及当前批次任务结束后再回收线程池。增加 Socket::adopt 与拥有 Socket 的连接构造，取消未建立连接时可直接析构；地址查询失败保存原始错误并抛出，不再返回未初始化地址。
 - 新增 [test_tcpserver.cpp](../tests/test_tcpserver.cpp) 与 [peer 翻译单元](../tests/test_tcpserver_peer.cpp)，注册 Debug/NDEBUG 两个目标，包含 9 组用例。真实本机临时端口验证零线程/两工作线程二进制 echo、轮询与回调线程归属、可选回调、活跃连接析构、析构后的关闭通知，以及受控阻塞工作队列下取消尚未执行的建立任务；故障注入验证启动失败、Socket 分配/名称复制/Channel 分配/连接构造前分配失败、回调复制失败、地址查询与 epoll 注册失败后的 fd 回收和后续接入，另检查重复启动、重入与错误线程拒绝。测试关键检查不依赖标准 assert。
 - 本轮测试和示例完整构建成功，29 项 CTest 全部通过；TcpServer 头文件独立、重复包含及测试源通过严格警告检查；TcpServer 专项通过 ASan/UBSan 与泄漏检测。同步析构仅在约定的线程和回调边界内验证，未扩展 Thread/EventLoopThread 既有异常策略、Acceptor EMFILE 恢复或异步停止。
@@ -182,4 +193,4 @@ EventLoopThreadPool、Socket、Acceptor、Buffer 与 TcpConnection 的当前最�
 - EPollPoller 测试使用真实 epoll 后端；EventLoop 独立测试使用 `tests/support/` 的 poll 后端进行故障注入，两者用途不同。
 - 构建和定向验证命令统一维护在 [AGENTS.md](../AGENTS.md)，实际测试数量以 CMake/CTest 为准。
 - 学习细节维护在 [learning-log/](learning-log/)；通用协作约定维护在 AGENTS.md，CLAUDE.md 仅作为入口。
-- 按当前安排暂不编写 README.md。
+- 安装说明维护在 [install.md](install.md)，脚本入口维护在 [testing.md](testing.md)；README 待后续推进。
