@@ -2,7 +2,7 @@
 
 netlib 当前保持 header-only，安装内容是公共头文件与 CMake 包配置。使用方通过 `netlib::netlib` 获取头文件路径、C++17 要求和 `Threads::Threads` 依赖。
 
-构建环境为 Linux、支持 C++17 的编译器及 CMake 3.14 或更新版本。安装包含当前 `include/netlib/` 下的公共头文件，各模块成熟度与生命周期约束见 [项目进度](progress.md)。
+构建环境为 Linux、支持 C++17 的编译器及 CMake 3.14 或更新版本。安装包含当前 `include/netlib/` 下的公共头文件；模块成熟度见 [项目进度](progress.md)，线程与生命周期契约见 [实现约定](design.md)。
 
 ## 安装到指定目录
 

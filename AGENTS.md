@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件是本仓库所有 AI 助手共用的协作约定。模块状态、当前路线和暂缓事项见 [doc/progress.md](doc/progress.md)，学习笔记见 [doc/learning-log/](doc/learning-log/)。涉及结构、进度或实现方向时，先阅读进度文档，再核对源码。
+本文件是本仓库所有 AI 助手共用的协作约定。涉及结构、进度或实现方向时，先阅读 [doc/progress.md](doc/progress.md)；涉及模块接口、线程与生命周期时，再阅读 [doc/design.md](doc/design.md) 对应章节，并核对源码。学习笔记见 [doc/learning-log/](doc/learning-log/)。
 
 ## 项目定位
 
@@ -40,45 +40,29 @@
 
 ## 构建与验证
 
-从仓库根目录执行：
+从仓库根目录执行常用入口：
 
 ```sh
-cmake -S . -B build -DNETLIB_BUILD_TESTS=ON -DNETLIB_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Debug
-cmake --build build -j
-ctest --test-dir build --output-on-failure --timeout 30
+scripts/test.sh
+scripts/test_install.sh
 ```
 
-安装与外部项目接入方式见 [doc/install.md](doc/install.md)。安装验证使用独立项目，仅链接 `netlib::netlib`，核对多翻译单元、C++17 与线程依赖传递，以及安装前缀迁移。
-
-脚本入口为 `scripts/test.sh`（Debug 回归）和 `scripts/test_install.sh`（临时安装与独立使用方验证），选项与失败现场说明见 [doc/testing.md](doc/testing.md)。安装使用方独立构建，不计入主项目的 CTest 数量。
-
-常用定向验证：
-
-```sh
-ctest --test-dir build -R '^(test_channel|test_epollpoller|test_eventloop|test_eventloopthread|test_eventloopthreadpool)(_ndebug)?$' --output-on-failure
-ctest --test-dir build -R '^test_thread$' --output-on-failure
-ctest --test-dir build -R '^test_log(_ndebug)?$' --output-on-failure
-ctest --test-dir build -R '^test_net$' --output-on-failure
-ctest --test-dir build -R '^test_buffer(_ndebug)?$' --output-on-failure
-ctest --test-dir build -R '^test_tcpconnection(_ndebug)?$' --output-on-failure
-ctest --test-dir build -R '^test_tcpserver(_ndebug)?$' --output-on-failure
-ctest --test-dir build -R '^test_echo_support(_ndebug)?$' --output-on-failure
-ctest --test-dir build -R '^test_echo_process$' --output-on-failure
-ctest --test-dir build -R '^test_socket(_ndebug)?$' --output-on-failure
-ctest --test-dir build -R '^test_acceptor(_ndebug)?$' --output-on-failure
-```
+手动构建、定向验证命令、脚本选项与覆盖边界统一维护在 [doc/testing.md](doc/testing.md)，安装与外部项目接入见 [doc/install.md](doc/install.md)。
 
 - 按变更运行相关测试，必要时验证示例构建和真实网络行为。涉及共享基础设施时运行完整回归。
 - 并发生命周期、错误路径和 header-only 链接应有针对性验证；适用时覆盖多翻译单元及 NDEBUG 构建。
 - 新增 NDEBUG 测试的关键检查不要依赖标准 `assert`；不要编写仅复述实现的测试。
 - 文档变更核对相对链接、源码事实及命令入口，无需重复编译未修改的代码。
-- 测试数量和名称以 `CMakeLists.txt` 及 `ctest --test-dir build -N` 为准。
+- 测试数量和名称以 `CMakeLists.txt` 及构建目录中的 `ctest -N` 为准。
 
 ## 文档维护
 
-- `AGENTS.md`：稳定的通用约束、协作规则、代码规范和验证命令。
+- `AGENTS.md`：稳定的协作规则、代码规范和验证要求。
 - `CLAUDE.md`：要求读取通用规则的简短入口，避免复制整份约定。
-- `doc/progress.md`：模块进度、已确定的实现决策、后续路线和暂缓问题；模块达到里程碑或方向变化时更新。
+- `doc/progress.md`：当前模块状态、后续路线、待办与暂缓事项、最近验证摘要；里程碑或方向变化时更新。
+- `doc/design.md`：当前模块接口、线程归属与生命周期契约；修改实现时同步核对。
+- `doc/testing.md` / `doc/install.md`：构建验证与安装接入步骤，各自维护具体命令。
+- `README.md`：项目介绍、快速运行和文档导航，后续撰写。
 - `doc/learning-log/`：学习过程、原理讲解和源码阅读笔记。
 - 进度区分“已实现”“最小实现”“已有原型”和“待完善”，不能仅根据存在文件就认定模块完整。
 - 修改后说明具体文件、行为变化及验证结果；无法验证的部分如实说明。
