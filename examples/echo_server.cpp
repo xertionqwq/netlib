@@ -4,6 +4,7 @@
 int main(int argc, char* argv[]) {
     using namespace netlib;
     using namespace netlib::example;
+    netlib::Logger::setLevel(netlib::LogLevel::WARN); // 压测版本：关闭热路径 INFO/DEBUG 日志。
     EchoOptions options;
     try {
         options = parseEchoOptions(argc, argv);
