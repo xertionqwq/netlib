@@ -272,6 +272,11 @@ void testEchoAndStop(int workers, int stopSignal) {
     observedFd = -1;
     checkMask(before);
     check(countEntries("/proc/self/fd") == fds, "normal stop leaked fd");
+    // join 返回时内核可能仍在回收已退出线程，短暂轮询后再判定线程数量。
+    const auto taskDeadline = std::chrono::steady_clock::now() + 1s;
+    while (countEntries("/proc/self/task") != tasks &&
+           std::chrono::steady_clock::now() < taskDeadline)
+        std::this_thread::sleep_for(1ms);
     check(countEntries("/proc/self/task") == tasks, "normal stop left worker threads alive");
     std::cout << "[PASS] workers=" << workers << " signal=" << stopSignal << '\n';
 }
