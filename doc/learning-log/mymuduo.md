@@ -3,38 +3,79 @@
 ---
 # muduo 启动时序图
 
-这里仅给出 baseLoop 里发生的事, ioLoop 的创建和发生暂定
+先给出 baseLoop 的启动流程
 
 ```mermaid
 sequenceDiagram
 	participant bloop as baseLoop
 	participant server as EchoServer
 	participant acc as Acceptor
+	participant thread as ioLoopThreadPool
 	participant poll as Poller
+	
 	bloop->>poll: 构造 baseLoop 的 Poller
 	poll-->>poll: 创建 epfd_
 	bloop->>server: 借出指针构造 Server
-	server->>acc: 构造函数内构造 Acceptor
-	acc-->>acc: 创建 listenfd 并进行 bind, 构造 acceptChannel
+	
+	par	
+		server->>acc: 构造函数内构造 Acceptor
+		acc-->>acc: 创建 listenfd 并进行 bind, 构造 acceptChannel
+	and
+		server->>thread: 构造函数内构造线程池
+		server->>thread: 开启前设置线程数量
+	end
+	
 	server->>acc: 设置新连接 fd 回调, newConnection()
 	server->>acc: 调用 start()
+	
 	par	
 		acc-->>acc: 开始 listen() 监听
-	and
 		acc->>poll: enableReading(), 向 Poller 注册
+	and
+		thread->>thread: 逐个构造 EventLoopThread, 并且设置线程构造时回调
 	end
-	bloop->>poll: 调用 loop.loop(), 事件循环开始
 	
+	bloop->>poll: 调用 loop.loop(), 事件循环开始
 	loop 直到 quit 被设置为 true
 		poll->>poll: epoll_wait() 阻塞等待事件 
 		alt 有新连接到达
 			poll-->>bloop: 返回就绪(新连接)事件
 			bloop->>acc: 调用 handleEvent()
 			acc->>acc: 创建 connfd 连接 fd, 调用 newConnectionCallback_() 移交新连接
-			Note over acc, server: Acceptor 执行 newConnection 回调, 创建 TcpConnection 并轮询一个 ioLoop 将新连接丢给它
+			Note over acc, thread: Acceptor 执行 newConnection 回调, 创建 TcpConnection 并轮询一个 ioLoop 将新连接丢给它
+			Note over acc, server: 向 Server 注册 connection_ 连接表
 		end
 	end
 ```
+
+接着是 ioLoop 的启动流程
+
+```mermaid
+sequenceDiagram
+	participant bloop as baseLoop
+	participant pool as ioLoopThreadPool
+	participant loopthread as EventLoopThread
+	participant ioloop as ioLoop
+	participant poller as Poller
+	
+	par
+		bloop->>pool: 构造函数内构造线程池
+		bloop->>pool: 设置线程数量
+	end
+	
+	bloop->>pool: 调用 start(), 启动线程池
+	Note over pool, loopthread: 尝试创建对应数量的工作线程，并调用对应线程的 start()
+	
+	Note over loopthread, ioloop: 创建 loop 栈变量变量
+	ioloop->>poller: 构造 Poller
+	poller->>poller: 创建 evfd_
+	Note over loopthread, ioloop: 调用 loop.loop() 开启事件循环
+	
+	loopthread-->>pool: start() 完成, 返回 ioLoop 指针
+	pool-->>bloop: getNextLoop() 轮询返回 ioLoop 指针
+```
+
+
 
 
 ---
