@@ -58,11 +58,11 @@ static void test_timeout_and_timestamp() {
     EventLoop loop;
     EPollPoller poller(&loop);
     Poller::ChannelList active;
-    const std::string before = Timestamp::now().toString();
+    const Timestamp before = Timestamp::now();
     const Timestamp received = poller.poll(0, active);
-    const std::string after = Timestamp::now().toString();
+    const Timestamp after = Timestamp::now();
     check(active.empty(), "zero timeout returned stale events");
-    check(received.toString() == before || received.toString() == after,
+    check(!(received < before) && !(after < received),
           "poll did not return its current batch timestamp");
 
     const auto start = std::chrono::steady_clock::now();

@@ -1,168 +1,121 @@
-#include <cassert>
-#include <chrono>
-#include <iostream>
-#include <thread>
+#include "netlib/timestamp.h"
 
-#include "netlib/log.h"
+#include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <iostream>
+
 #include "netlib/timer.h"
 
-// ============================================================
-// Timer 测试 — 毫秒级定时器基础功能
-// ============================================================
+int64_t timerSequenceInOtherTranslationUnit();
+netlib::Timestamp addTimeInOtherTranslationUnit(netlib::Timestamp now, double seconds);
 
-// 1. 定时器到期后回调被取出
-void test_timer_expires() {
-    netlib::TimerManager mgr;
-    bool called = false;
+namespace {
 
-    mgr.addTimer(50, [&]() { called = true; });
-    assert(mgr.hasTimer());
-
-    // 等定时器到期
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    std::vector<netlib::TimerManager::FunCallback> cbs;
-    mgr.listExpiredCb(cbs);
-
-    assert(cbs.size() == 1);
-    cbs[0]();  // 执行到期回调
-    assert(called);
-    assert(!mgr.hasTimer());
-}
-
-// 2. 未到期定时器不触发
-void test_timer_not_expired() {
-    netlib::TimerManager mgr;
-    mgr.addTimer(500, []() {});
-
-    std::vector<netlib::TimerManager::FunCallback> cbs;
-    mgr.listExpiredCb(cbs);
-
-    assert(cbs.empty());
-    assert(mgr.hasTimer());
-}
-
-// 3. 多个定时器按到期顺序取出
-void test_multiple_timers() {
-    netlib::TimerManager mgr;
-    std::string trace;
-
-    // 按 (到期时间, 标记) 添加，到期顺序: 100 < 200 < 300
-    mgr.addTimer(200, [&]() { trace += "B"; });
-    mgr.addTimer(100, [&]() { trace += "A"; });
-    mgr.addTimer(300, [&]() { trace += "C"; });
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(350));
-
-    std::vector<netlib::TimerManager::FunCallback> cbs;
-    mgr.listExpiredCb(cbs);
-
-    for (auto &cb : cbs) cb();
-    assert(trace == "ABC");
-}
-
-// 4. 循环定时器到期后自动续期
-void test_recurring_timer() {
-    netlib::TimerManager mgr;
-    int count = 0;
-
-    mgr.addTimer(50, [&]() { count++; }, true);
-
-    // 等 3 个间隔
-    for (int i = 0; i < 3; i++) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(60));
-        std::vector<netlib::TimerManager::FunCallback> cbs;
-        mgr.listExpiredCb(cbs);
-        for (auto &cb : cbs) cb();
+// 关键检查在 NDEBUG 下同样执行。
+void check(bool condition, const char* message) {
+    if (!condition) {
+        std::cerr << "test_timer failed: " << message << '\n';
+        std::exit(EXIT_FAILURE);
     }
-
-    assert(count == 3);
-    assert(mgr.hasTimer());  // 还在循环
 }
 
-// 5. getNextTimer 返回最近到期时间
-void test_get_next_timer() {
-    netlib::TimerManager mgr;
-    mgr.addTimer(300, []() {});
-
-    auto next = mgr.getNextTimer();
-    // 应大约为 300ms，考虑调度误差允许 [200, 310]
-    assert(next >= 200 && next <= 310);
+void checkDifference(netlib::Timestamp high, netlib::Timestamp low, double seconds) {
+    check(std::abs(netlib::timeDifference(high, low) - seconds) < 1e-12,
+          "time difference has incorrect units or lost fractional seconds");
 }
 
-// 6. cancel 取消定时器
-void test_cancel() {
-    netlib::TimerManager mgr;
-    auto timer = mgr.addTimer(50, []() {});
+void testTimestampUnits() {
+    using netlib::Timestamp;
+    const Timestamp epoch(1'700'000'000'123'456LL);
+    check(epoch.microSecondsSinceEpoch() == 1'700'000'000'123'456LL,
+          "Timestamp constructor must accept microseconds");
+    check(epoch.secondsSinceEpoch() == 1'700'000'000,
+          "seconds accessor must remove the fractional part");
+    check(epoch.toString() == "1700000000.123456", "incorrect timestamp text");
+    check(Timestamp(5'000'000'000'000'007LL).toString() == "5000000000.000007",
+          "timestamp formatting truncated 64-bit seconds or lost zero padding");
+    check(Timestamp::invalid() == Timestamp(), "inconsistent invalid timestamp");
+    check(Timestamp::invalid().toString() == "0.000000", "incorrect zero timestamp text");
 
-    bool ok = timer->cancel();
-    assert(ok);
+    checkDifference(Timestamp(1'500'000), Timestamp(1'000'000), 0.5);
+    checkDifference(Timestamp(1'000'000), Timestamp(1'500'000), -0.5);
+    checkDifference(Timestamp(1'100'000), Timestamp(900'000), 0.2);
+    checkDifference(Timestamp(1'000'001), Timestamp(1'000'000), 0.000001);
+    checkDifference(Timestamp(2'000'000), Timestamp(1'000'000), 1.0);
+    checkDifference(epoch, epoch, 0.0);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    std::vector<netlib::TimerManager::FunCallback> cbs;
-    mgr.listExpiredCb(cbs);
-    assert(cbs.empty());
+    check(netlib::addTime(epoch, 0.5).microSecondsSinceEpoch() == 1'700'000'000'623'456LL,
+          "adding a fractional second lost precision");
+    check(netlib::addTime(epoch, -0.125).microSecondsSinceEpoch() == 1'699'999'999'998'456LL,
+          "subtracting a fractional second did not cross the second boundary");
+    check(netlib::addTime(epoch, 0.000001).microSecondsSinceEpoch()
+              == 1'700'000'000'123'457LL,
+          "adding one microsecond lost precision");
+    check(netlib::addTime(epoch, 0.0000005) == epoch,
+          "sub-microsecond interval must truncate to the stored resolution");
+    check(addTimeInOtherTranslationUnit(epoch, 0.5) == netlib::addTime(epoch, 0.5),
+          "time calculation differs between translation units");
 
-    // 重复 cancel 应返回 false
-    assert(!timer->cancel());
+    Timestamp earlier(1'000'000);
+    Timestamp later(1'000'001);
+    check(earlier < later, "timestamp comparison lost microseconds");
+    earlier.swap(later);
+    check(earlier.microSecondsSinceEpoch() == 1'000'001
+              && later.microSecondsSinceEpoch() == 1'000'000,
+          "timestamp swap lost microseconds");
 }
 
-// 7. refresh 刷新定时器延长超时
-void test_refresh() {
-    netlib::TimerManager mgr;
-    auto timer = mgr.addTimer(50, []() {});
-
-    // 立刻刷新，等 100ms 后应只触发一次（刷新的那次）
-    bool ok = timer->refresh();
-    assert(ok);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    std::vector<netlib::TimerManager::FunCallback> cbs;
-    mgr.listExpiredCb(cbs);
-    assert(cbs.size() == 1);  // 刷新后的触发
+void testTimestampNow() {
+    using namespace std::chrono;
+    const auto before = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
+    const auto now = netlib::Timestamp::now().microSecondsSinceEpoch();
+    const auto after = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
+    check(now >= before && now <= after, "Timestamp::now must return Unix time in microseconds");
 }
 
-// 8. reset 重设定时间隔
-void test_reset() {
-    netlib::TimerManager mgr;
-    int value = 0;
-    auto timer = mgr.addTimer(200, [&]() { value = 42; });
+void testTimerRestart() {
+    using netlib::Timestamp;
+    int calls = 0;
+    const Timestamp firstExpiration(10'250'000);
+    netlib::Timer timer([&] { ++calls; }, firstExpiration, 0.125);
+    check(timer.repeat(), "positive sub-second interval must create a repeating timer");
+    check(timer.expiration() == firstExpiration, "interval changed the first expiration");
+    check(calls == 0, "Timer constructor must not execute the callback");
+    const int64_t sequence = timer.sequence();
+    timer.run();
+    check(calls == 1, "Timer::run must execute the callback once");
+    timer.restart(Timestamp(20'500'000));
+    check(timer.expiration() == Timestamp(20'625'000),
+          "repeating timer must restart from now plus the fractional interval");
+    check(timer.sequence() == sequence, "restarting changed the timer identity");
+    check(calls == 1, "Timer::restart must not execute the callback");
 
-    // 重设为 50ms
-    timer->reset(50, true);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    std::vector<netlib::TimerManager::FunCallback> cbs;
-    mgr.listExpiredCb(cbs);
-    assert(cbs.size() == 1);
-    cbs[0]();
-    assert(value == 42);
+    netlib::Timer oneShot([&] { ++calls; }, firstExpiration);
+    check(!oneShot.repeat(), "default timer must run once");
+    oneShot.run();
+    oneShot.restart(Timestamp(20'500'000));
+    check(calls == 2, "one-shot callback was not executed exactly once");
+    check(oneShot.expiration() == Timestamp::invalid(),
+          "one-shot restart must invalidate the expiration");
 }
+
+void testTimerSequenceAcrossTranslationUnits() {
+    const int64_t before = netlib::Timer::numCreated();
+    netlib::Timer timer([] {}, netlib::Timestamp(1'000'000));
+    check(timer.sequence() == before + 1, "timer sequence did not advance");
+    check(timerSequenceInOtherTranslationUnit() == before + 2,
+          "timer sequence counter is not shared between translation units");
+    check(netlib::Timer::numCreated() == before + 2,
+          "timer creation count must be cumulative across translation units");
+}
+
+} // namespace
 
 int main() {
-    test_timer_expires();
-    std::cout << "[1/8] test_timer_expires passed" << std::endl;
-
-    test_timer_not_expired();
-    std::cout << "[2/8] test_timer_not_expired passed" << std::endl;
-
-    test_multiple_timers();
-    std::cout << "[3/8] test_multiple_timers passed" << std::endl;
-
-    test_recurring_timer();
-    std::cout << "[4/8] test_recurring_timer passed" << std::endl;
-
-    test_get_next_timer();
-    std::cout << "[5/8] test_get_next_timer passed" << std::endl;
-
-    test_cancel();
-    std::cout << "[6/8] test_cancel passed" << std::endl;
-
-    test_refresh();
-    std::cout << "[7/8] test_refresh passed" << std::endl;
-
-    test_reset();
-    std::cout << "[8/8] test_reset passed" << std::endl;
-
-    std::cout << "test_timer: all passed" << std::endl;
-    return 0;
+    testTimestampUnits();
+    testTimestampNow();
+    testTimerRestart();
+    testTimerSequenceAcrossTranslationUnits();
+    std::cout << "test_timer: all passed\n";
 }

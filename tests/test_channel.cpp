@@ -70,7 +70,9 @@ static void test_registration_lifecycle() {
         check(stage == 1, "disabled channel was dispatched before re-enabling");
         char byte;
         check(::read(data.fd(0), &byte, 1) == 1 && byte == 'd', "data read failed");
-        check(receiveTime.toString().size() == 8, "receive timestamp missing");
+        check(receiveTime.microSecondsSinceEpoch() > 0
+                  && receiveTime == loop.pollReturnTime(),
+              "receive timestamp missing or changed during dispatch");
         stage = 2;
         loop.quit();
     });

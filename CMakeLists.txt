@@ -182,9 +182,14 @@ if(NETLIB_BUILD_TESTS)
     target_link_libraries(test_scheduler PRIVATE netlib)
     add_test(NAME test_scheduler COMMAND test_scheduler)
 
-    add_executable(test_timer tests/test_timer.cpp)
-    target_link_libraries(test_timer PRIVATE netlib)
-    add_test(NAME test_timer COMMAND test_timer)
+    # muduo 路线的 Timer 重启语义与 Timestamp 单位换算，含多翻译单元和 NDEBUG。
+    foreach(timer_target IN ITEMS test_timer test_timer_ndebug)
+        add_executable(${timer_target} tests/test_timer.cpp tests/test_timer_peer.cpp)
+        target_link_libraries(${timer_target} PRIVATE netlib)
+        add_test(NAME ${timer_target} COMMAND ${timer_target})
+        set_tests_properties(${timer_target} PROPERTIES TIMEOUT 10)
+    endforeach()
+    target_compile_definitions(test_timer_ndebug PRIVATE NDEBUG)
 endif()
 
 if(NETLIB_BUILD_EXAMPLES)
