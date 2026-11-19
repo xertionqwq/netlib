@@ -33,6 +33,7 @@ ctest -N
 ctest -R '^(test_channel|test_epollpoller|test_eventloop|test_eventloopthread|test_eventloopthreadpool)(_ndebug)?$' --output-on-failure
 ctest -R '^test_thread$' --output-on-failure
 ctest -R '^test_log(_ndebug)?$' --output-on-failure
+ctest -R '^test_timer(queue)?(_ndebug)?$' --output-on-failure
 ctest -R '^test_net$' --output-on-failure
 ctest -R '^test_buffer(_ndebug)?$' --output-on-failure
 ctest -R '^test_tcpconnection(_ndebug)?$' --output-on-failure
@@ -44,6 +45,8 @@ ctest -R '^test_acceptor(_ndebug)?$' --output-on-failure
 ```
 
 网络模块专项覆盖真实 I/O、生命周期与错误路径，适用时包含多翻译单元和 NDEBUG。EPollPoller 测试使用真实 epoll；EventLoop 独立测试使用 `tests/support/` 的 poll 后端进行故障注入，两者用途不同。
+
+Timer 专项覆盖 Timestamp 的微秒存储、亚秒差值与加减、64 位格式化、当前时间，以及 Timer 的亚秒重启、单次失效和跨翻译单元序列号共享。[TimerQueue 专项](../tests/test_timerqueue.cpp) 使用真实 EventLoop 和 timerfd，验证单位换算、待入队取消、析构后处理待办、注册与读取失败，以及回调异常的传播、到期批次恢复和剩余任务唤醒。两组专项均包含 NDEBUG 版本。
 
 ## 回声示例与验证范围
 

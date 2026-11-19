@@ -190,6 +190,18 @@ if(NETLIB_BUILD_TESTS)
         set_tests_properties(${timer_target} PROPERTIES TIMEOUT 10)
     endforeach()
     target_compile_definitions(test_timer_ndebug PRIVATE NDEBUG)
+
+    foreach(timer_queue_target IN ITEMS test_timerqueue test_timerqueue_ndebug)
+        add_executable(${timer_queue_target} tests/test_timerqueue.cpp)
+        target_link_libraries(${timer_queue_target} PRIVATE netlib)
+        # 使优化构建也经由 read 符号，让故障注入覆盖 timerfd 读取。
+        target_compile_options(${timer_queue_target} PRIVATE -U_FORTIFY_SOURCE)
+        target_link_options(${timer_queue_target} PRIVATE "-Wl,--wrap=timerfd_create"
+            "-Wl,--wrap=epoll_ctl" "-Wl,--wrap=read" "-Wl,--wrap=gettimeofday")
+        add_test(NAME ${timer_queue_target} COMMAND ${timer_queue_target})
+        set_tests_properties(${timer_queue_target} PROPERTIES TIMEOUT 10)
+    endforeach()
+    target_compile_definitions(test_timerqueue_ndebug PRIVATE NDEBUG)
 endif()
 
 if(NETLIB_BUILD_EXAMPLES)

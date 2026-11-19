@@ -1,6 +1,6 @@
 # 项目进度
 
-更新日期：2026-11-07。
+更新日期：2026-11-19。
 
 ## 当前状态
 
@@ -8,12 +8,14 @@
 
 muduo 整体回顾已完成，见 [学习笔记](learning-log/mymuduo.md)。文档已按职责整理；跨端与回环压测阶段已完成：3 Mbps 时公网 5 B ping-pong 平台约 6.2k QPS，50 Mbps 时约 29k；本机回环约 70k–105k QPS，客户端与服务端共享 2 vCPU。已记录当前环境下的吞吐，尚未测得独立服务端极限，公网小包平台的具体限制位置仍待验证。[README 初稿](../README.md) 已补齐项目介绍、快速运行与文档导航，待审阅。协程仍为学习原型，后续单独讨论工程化与整合。
 
+定时器已转向 muduo 的 Timer / TimerId / TimerQueue 路线。当前支持显式构造 TimerQueue，通过 Channel 接收计时事件。EventLoop 的内置定时接口仍待接入。旧 TimerManager 原型的学习过程保留在学习笔记中。
+
 ## 模块状态
 
 | 模块 | 状态 | 当前能力与边界 |
 |---|---|---|
 | Noncopyable | 已实现 | 禁止资源类拷贝 |
-| Logger / Timestamp | 已实现 | 同步流式日志、级别过滤、errno 保存、FATAL、项目断言与本地时间格式化 |
+| Logger / Timestamp | 已实现 | 同步流式日志、级别过滤、errno 保存、FATAL、项目断言与微秒时间戳格式化 |
 | CurrentThread / Thread | 基本实现完成 | Linux TID、构造即启动、线程命名及 join 回收 |
 | Channel | 核心实现完成 | 事件关注与分发、时间戳传递、tie 生命周期保护 |
 | Poller / EPollPoller | 核心实现完成 | 抽象接口、epoll 后端与注册状态管理；默认工厂仅支持 epoll |
@@ -28,17 +30,19 @@ muduo 整体回顾已完成，见 [学习笔记](learning-log/mymuduo.md)。文�
 | TcpServer | 最小实现 | 接入分发、连接管理、回调转交和同步析构清理 |
 | EchoServer 示例 | 最小示例 | 持续字节回声、端口与线程配置、READY 通知和信号停止 |
 | 构建与验证 | 已接通 | CMake 安装导出、日常回归和独立使用方安装验证 |
-| Fiber / Scheduler / Timer | 已有学习原型 | 尚未与 Reactor 整合，跨翻译单元和 NDEBUG 适配待审查 |
+| Timer / TimerQueue | 最小实现 | 支持单次和重复任务、基于 timerfd 的事件分发及通过 TimerId 取消，调用方显式管理队列 |
+| Fiber / Scheduler | 已有学习原型 | 尚未与 Reactor 整合，跨翻译单元和 NDEBUG 适配待审查 |
 | IOManager / Hook / Stream / ByteArray | 后续方向 | 尚未实现，引入方式届时再定 |
 
 接口、线程归属和生命周期约定集中在 [design.md](design.md)；测试覆盖与运行方式见 [testing.md](testing.md)。
 
 ## 下一步
 
-1. 审阅 README 初稿，确认项目介绍、快速运行与接入说明。
-2. 压测阶段结束；如需继续测服务端公网能力，改用云上同地域客户端，并按 [压测计划与结果](benchmark-plan.md) 收尾临时安全组规则。
-3. 根据实际使用补充 Reactor 场景，逐项讨论停止、超时等收尾需求。
-4. 后续再回顾协程原型，确定与网络层的整合方向。
+1. 将 TimerQueue 接入 EventLoop 的定时接口。
+2. 审阅 README 初稿，确认项目介绍、快速运行与接入说明。
+3. 压测阶段结束；如需继续测服务端公网能力，改用云上同地域客户端，并按 [压测计划与结果](benchmark-plan.md) 收尾临时安全组规则。
+4. 根据实际使用补充 Reactor 场景，逐项讨论停止、超时等收尾需求。
+5. 后续再回顾协程原型，确定与网络层的整合方向。
 
 上述路线不表示已授权直接实现全部后续模块。
 
@@ -59,6 +63,17 @@ muduo 整体回顾已完成，见 [学习笔记](learning-log/mymuduo.md)。文�
 暂缓事项除非用户明确要求，不主动扩展处理。
 
 ## 最近验证
+
+2026-11-19 TimerQueue 验证：
+
+- 完整 Debug 回归 35/35 通过。新增 TimerQueue 常规和 NDEBUG 专项覆盖待入队取消、析构后待办处理、timerfd 单位换算及注册与读取失败。
+- TimerQueue 回调异常向上传播，新增批次恢复和剩余任务重新唤醒验证。专项通过 GCC、Clang 的 C++17 多翻译单元严格警告构建，以及 ASan/UBSan 运行。
+
+2026-11-16 时间单位调整验证：
+
+- 完整 Debug 构建成功；在允许本地网络的环境中 33/33 项 CTest 通过，包含 Timer、Channel、EPollPoller 的 NDEBUG 专项与真实回声程序子进程回归。
+- 新版 Timer 测试覆盖 Timestamp 亚秒换算、64 位格式化、Timer 重启与单次失效，以及多翻译单元共享序列号；另以 `-O2 -DNDEBUG -Wall -Wextra -Wpedantic -Werror` 编译运行通过。
+- 两种安装布局迁移后的四组 Debug/Release 独立使用方验证通过；不代表协程原型已通过完整 Release 回归。
 
 2026-11-05 的代码验证：
 

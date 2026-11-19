@@ -4,6 +4,18 @@
 
 项目保持 header-only；类外函数及共享状态按需使用 C++17 inline，避免多翻译单元重复定义。CMake 接入方式见 [install.md](install.md)。
 
+## Timestamp、Timer 与 TimerQueue
+
+源码：[timestamp.h](../include/netlib/timestamp.h)、[timer.h](../include/netlib/timer.h)、[timerId.h](../include/netlib/timerId.h)、[timerQueue.h](../include/netlib/timerQueue.h)。
+
+- Timestamp 构造参数和内部存储均为自 Unix epoch 起的 `int64_t` 微秒数；默认值及 invalid 为 0。now 使用 gettimeofday 获取墙上时间，microSecondsSinceEpoch 返回完整微秒值，secondsSinceEpoch 返回去掉小数部分的整秒值。
+- timeDifference 返回 double 秒，保留微秒差值；addTime 接受 double 秒，先换算为整数微秒，不足一微秒的部分向零截断。toString 输出 `秒.六位微秒`，Logger 也采用该格式。
+- Timer 的 when 是首次绝对到期时间，interval 是后续重复的 double 秒间隔；正间隔表示重复，默认 0 表示单次。restart(now) 将重复定时器设为 now + interval，单次定时器设为 invalid；run 直接调用必需的非空回调，构造与 restart 不执行回调。
+- Timer 的序列号由跨翻译单元共享的 inline 原子计数器分配，重启不改变序列号。TimerId 由借用指针和序列号组成，可复制并交回原队列取消。
+- 当前由调用方显式构造 TimerQueue。构造和析构在所属 EventLoop 线程执行，析构安排在事件分发之外，且 EventLoop 必须存活更久。addTimer 和 cancel 支持跨线程调用，调用方须保证两者在调用期间存活。跨线程添加先由待入队表持有，loop 可在插入前取消。析构释放待入队 Timer，已排队的操作通过弱引用判断队列是否存活。
+- TimerQueue 使用一个相对单次 timerfd 和 Channel。最早到期时间的剩余微秒换算为秒和纳秒，读取完整到期计数后在所属 loop 线程执行到期回调。正常处理时，已取入本批的任务仍会执行，取消只阻止它再次入队。
+- 回调抛异常时中断本批，在退出回调阶段时复位 `callingExpiredTimers_`。失败的 Timer 释放，已完成且未取消的重复任务正常续期，尚未执行且未取消的任务保留原到期点。队列重新设置 timerfd 后向 `EventLoop::loop()` 的调用者传播原异常。调用者捕获异常后，若 loop 未收到退出请求，可以再次进入 `loop()`。
+
 ## EventLoop、Channel 与 Poller
 
 源码：[eventloop.h](../include/netlib/eventloop.h)、[channel.h](../include/netlib/channel.h)、[poller.h](../include/netlib/poller.h)。
