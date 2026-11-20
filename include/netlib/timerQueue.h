@@ -22,10 +22,11 @@
 #include "netlib/Callbacks.h"
 #include "netlib/log.h"
 #include "netlib/channel.h"
-#include "netlib/eventloop.h"
 #include "netlib/noncopyable.h"
 
 namespace netlib {
+
+class EventLoop;
 
 inline int createTimerfd() {
     int timerfd = ::timerfd_create(CLOCK_MONOTONIC,
@@ -165,6 +166,12 @@ private:
     ActiveTimerSet cancelingTimers_;        // 本批到期后不再入队的任务
     std::shared_ptr<PendingAdds> pendingAdds_; // 待办 lambda 通过弱引用检查队列是否存活
 };
+
+} // namespace netlib
+
+#include "netlib/eventloop.h"
+
+namespace netlib {
 
 inline TimerQueue::TimerQueue(EventLoop *loop)
     : loop_(checkLoopInThread(loop))

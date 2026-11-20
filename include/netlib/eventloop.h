@@ -18,11 +18,15 @@
 
 #include "netlib/poller.h"
 #include "netlib/channel.h"
+#include "netlib/Callbacks.h"
 #include "netlib/noncopyable.h"
 #include "netlib/currentThread.h"
 #include "netlib/defaultPoller.h"
 
 namespace netlib{
+
+class TimerQueue;
+class TimerId;
 
 class EventLoop : private Noncopyable{
 
@@ -71,6 +75,16 @@ public:
     // 将回调放入队列中, 唤醒 loop 所在线程并执行回调
     void queueInLoop(Functor&&);
 
+    // Timers
+    // 添加一个 timer, 在到达时间点 time 执行任务(不保证准时)
+    TimerId runAt(Timestamp time, TimerCallback cb);
+    // 添加一个 timer, 在经过 delay 时间后执行任务(不保证准时执行)
+    TimerId runAfter(double delay, TimerCallback cb);
+    // 添加一个 timer, 循环定时器, 每隔 interval 执行一次(不保证准时执行)
+    TimerId runEvery(double interval, TimerCallback cb);
+    // 取消一个已有的定时器, 无该定时器时什么都不会发生
+    void cancel(TimerId timerId);
+
     // 唤醒 loop 所在线程
     void wakeup();
 
@@ -118,6 +132,7 @@ private:
     std::atomic_bool callingPendingFunctors_;   // 是否正在执行已取出的待办任务
     std::vector<Functor> pendingFunctors_;      // 等待执行的任务
     std::mutex mutex_;                          // 保护回调容器的线程安全
+    std::unique_ptr<TimerQueue> timerQueue_;    // 定时任务管理器
 };
 
 // 仅检查借用指针非空，允许在其他线程中验证目标 loop。
@@ -132,6 +147,13 @@ inline EventLoop* checkLoopInThread(EventLoop* loop) {
     checkLoop(loop)->assertInLoopThread();
     return loop;
 }
+
+} // namespace netlib
+
+
+#include "netlib/timerQueue.h"
+
+namespace netlib {
 
 // 记录本线程的 EventLoop，每个线程至多有一个存活实例
 inline thread_local EventLoop *loopPtr = nullptr;
@@ -164,6 +186,7 @@ inline EventLoop::EventLoop(int timeWaitMs)
         NETLIB_LOG_FATAL << "Another Event " << loopPtr
                          << " exists in this thread " << loopPtr->threadId_ << '\n';
     }
+    timerQueue_ = std::make_unique<TimerQueue>(this);
     wakeupFd_ = createEventfd();
     try {
         wakeupChannel_ = std::make_unique<Channel>(this, wakeupFd_);
@@ -180,6 +203,7 @@ inline EventLoop::EventLoop(int timeWaitMs)
 inline EventLoop::~EventLoop() {
     assertInLoopThread();
     NETLIB_ASSERT(!looping_);
+    timerQueue_.reset();
     // 管理 wakeup 资源
     wakeupChannel_->disableAll();
     wakeupChannel_->remove();
@@ -254,6 +278,24 @@ inline void EventLoop::queueInLoop(Functor &&cb) {
         wakeup();
 }
 
+inline TimerId EventLoop::runAt(Timestamp time, TimerCallback cb) {
+    return timerQueue_->addTimer(std::move(cb), time, 0.0);
+}
+
+inline TimerId EventLoop::runAfter(double delay, TimerCallback cb) {
+    Timestamp when(addTime(Timestamp::now(), delay));
+    return timerQueue_->addTimer(std::move(cb), when, 0.0);
+}
+
+inline TimerId EventLoop::runEvery(double interval, TimerCallback cb) {
+    Timestamp when(addTime(Timestamp::now(), interval));
+    return timerQueue_->addTimer(std::move(cb), when, interval);
+}
+
+inline void EventLoop::cancel(TimerId timerId) {
+    return timerQueue_->cancel(timerId);
+}
+
 // 用来唤醒 loop 所在的线程 向 wakeupfd_ 写一个数据
 inline void EventLoop::wakeup() {
     uint64_t one = 1;
@@ -308,6 +350,6 @@ inline void Channel::remove() {
 inline void Poller::assertInLoopThread() {
     ownerLoop_->assertInLoopThread();
 }
-};
+}; // netlib
 
 #endif // NETLIB_EVENTLOOP_H

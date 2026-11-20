@@ -12,7 +12,7 @@
 - timeDifference 返回 double 秒，保留微秒差值；addTime 接受 double 秒，先换算为整数微秒，不足一微秒的部分向零截断。toString 输出 `秒.六位微秒`，Logger 也采用该格式。
 - Timer 的 when 是首次绝对到期时间，interval 是后续重复的 double 秒间隔；正间隔表示重复，默认 0 表示单次。restart(now) 将重复定时器设为 now + interval，单次定时器设为 invalid；run 直接调用必需的非空回调，构造与 restart 不执行回调。
 - Timer 的序列号由跨翻译单元共享的 inline 原子计数器分配，重启不改变序列号。TimerId 由借用指针和序列号组成，可复制并交回原队列取消。
-- 当前由调用方显式构造 TimerQueue。构造和析构在所属 EventLoop 线程执行，析构安排在事件分发之外，且 EventLoop 必须存活更久。addTimer 和 cancel 支持跨线程调用，调用方须保证两者在调用期间存活。跨线程添加先由待入队表持有，loop 可在插入前取消。析构释放待入队 Timer，已排队的操作通过弱引用判断队列是否存活。
+- EventLoop 构造时创建自己的 TimerQueue，在 Poller 仍可用时析构它。显式构造的 TimerQueue 同样要求在所属 loop 线程构造并在事件分发之外析构，且 EventLoop 必须存活更久。addTimer 和 cancel 支持跨线程调用，调用方须保证队列与 loop 在调用期间存活。跨线程添加先由待入队表持有，loop 可在插入前取消。析构释放待入队 Timer，已排队的操作通过弱引用判断队列是否存活。
 - TimerQueue 使用一个相对单次 timerfd 和 Channel。最早到期时间的剩余微秒换算为秒和纳秒，读取完整到期计数后在所属 loop 线程执行到期回调。正常处理时，已取入本批的任务仍会执行，取消只阻止它再次入队。
 - 回调抛异常时中断本批，在退出回调阶段时复位 `callingExpiredTimers_`。失败的 Timer 释放，已完成且未取消的重复任务正常续期，尚未执行且未取消的任务保留原到期点。队列重新设置 timerfd 后向 `EventLoop::loop()` 的调用者传播原异常。调用者捕获异常后，若 loop 未收到退出请求，可以再次进入 `loop()`。
 
@@ -23,6 +23,7 @@
 - 每个线程至多存在一个 EventLoop。Channel 的注册、更新与移除在所属 loop 线程执行；跨线程通过 runInLoop 或 queueInLoop 提交任务，并保证对象及目标 loop 存活。
 - checkLoop 和 checkLoopInThread 是定义在 EventLoop 完整定义之后的 inline 自由函数。前者仅验证非空，空指针抛 std::invalid_argument；后者额外检查所属线程，错误线程在 NDEBUG 下仍终止。
 - runInLoop 在所属线程可立即执行，queueInLoop 始终排队。quit 请求结束循环，不承诺排空全部待办任务；对象清理不能依赖循环退出后继续执行队列。
+- runAt 在给定的 Timestamp 调度单次任务，runAfter 按 double 秒延迟调度单次任务，runEvery 按正的 double 秒间隔调度重复任务。三个接口返回 TimerId，交回同一个 EventLoop 的 cancel 取消。调度与取消支持跨线程调用，回调在所属 loop 线程执行。
 - Channel::tie 保存弱引用，在整个事件回调分发期间取得强引用保护；禁用事件后仍需移除 Channel，再销毁它。Poller 仅借用 Channel 指针，不释放对象或关闭 fd。
 - EPollPoller 与 Poller 基类分离，当前默认工厂只提供 epoll；请求不支持的后端会报告错误。
 

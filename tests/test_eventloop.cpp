@@ -237,7 +237,7 @@ static void test_constructor_failure_cleanup() {
     }
     check(caught, "injected registration failure was not reported");
     check(loopPtr == nullptr, "failed constructor retained its thread registration");
-    check(openFdCount() == before, "failed constructor leaked its eventfd");
+    check(openFdCount() == before, "failed constructor leaked an fd");
     constructEventLoopInOtherTranslationUnit();
     check(loopPtr == nullptr, "destructor retained its thread registration");
     check(openFdCount() == before, "successful construction/destruction leaked an fd");

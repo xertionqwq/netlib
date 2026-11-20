@@ -13,7 +13,7 @@ namespace netlib {
 /*
 ** 内部事件时间类
 ** 支持到时执行
-** 支持定时执行, 一旦设置便重复
+** 支持定时执行, 一旦设置大于 0.0 便重复
 */
 class Timer : Noncopyable {
 public:

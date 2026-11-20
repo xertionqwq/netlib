@@ -12,7 +12,8 @@
 namespace {
 
 int timerFd = -1;
-bool failRegistration = false;
+int registrationsUntilFailure = 0;
+int failedRegistrationFd = -1;
 bool fixedWallTime = false;
 bool injectReads = false;
 int readAttempts = 0;
@@ -35,7 +36,8 @@ extern "C" int __wrap_timerfd_create(int clock, int flags) {
 
 extern "C" int __real_epoll_ctl(int, int, int, epoll_event *);
 extern "C" int __wrap_epoll_ctl(int epollFd, int op, int fd, epoll_event *event) {
-    if (failRegistration && op == EPOLL_CTL_ADD && fd == timerFd) {
+    if (op == EPOLL_CTL_ADD && registrationsUntilFailure > 0 && --registrationsUntilFailure == 0) {
+        failedRegistrationFd = fd;
         errno = EIO;
         return -1;
     }
@@ -141,17 +143,72 @@ void testDestroyWithPendingWork() {
 
 void testConstructorClosesFdOnRegistrationFailure() {
     netlib::EventLoop loop;
-    failRegistration = true;
+    registrationsUntilFailure = 1;
     bool caught = false;
     try {
         netlib::TimerQueue queue(&loop);
     } catch (const std::system_error &error) {
         caught = error.code().value() == EIO;
     }
-    failRegistration = false;
     check(caught && timerFd >= 0, "registration failure did not propagate");
     const int result = ::fcntl(timerFd, F_GETFD);
     check(result == -1 && errno == EBADF, "constructor failure leaked timerfd");
+}
+
+void testLoopConstructorClosesFdsOnRegistrationFailure() {
+    for (int registration : {1, 2}) {
+        registrationsUntilFailure = registration;
+        failedRegistrationFd = -1;
+        bool caught = false;
+        try {
+            netlib::EventLoop loop;
+        } catch (const std::system_error &error) {
+            caught = error.code().value() == EIO;
+        }
+        check(caught && failedRegistrationFd >= 0, "loop registration failure did not propagate");
+        check(netlib::loopPtr == nullptr, "failed loop constructor left its thread registered");
+        check(::fcntl(timerFd, F_GETFD) == -1 && errno == EBADF,
+              "failed loop constructor leaked its timerfd");
+        check(::fcntl(failedRegistrationFd, F_GETFD) == -1 && errno == EBADF,
+              "failed loop constructor leaked the fd it was registering");
+    }
+}
+
+void testEventLoopTimerMethods() {
+    netlib::EventLoop loop(-1);
+    int atCalls = 0;
+    int afterCalls = 0;
+    int everyCalls = 0;
+    const auto finish = [&] {
+        if (atCalls == 1 && afterCalls == 1 && everyCalls == 2)
+            loop.quit();
+    };
+
+    loop.runAt(netlib::Timestamp::now(), [&] {
+        ++atCalls;
+        finish();
+    });
+    netlib::TimerId repeating;
+    repeating = loop.runEvery(0.002, [&] {
+        if (++everyCalls == 2)
+            loop.cancel(repeating);
+        finish();
+    });
+
+    std::thread worker([&] {
+        const auto canceled = loop.runAfter(0.0, [] { check(false, "canceled timer ran"); });
+        loop.cancel(canceled);
+        loop.runAfter(0.0, [&] {
+            check(loop.isInLoopTread(), "timer callback ran outside the owner loop");
+            ++afterCalls;
+            finish();
+        });
+    });
+    worker.join();
+
+    loop.loop();
+    check(atCalls == 1 && afterCalls == 1 && everyCalls == 2,
+          "EventLoop timer methods did not dispatch the expected callbacks");
 }
 
 void testUnsuccessfulReadsDoNotDispatch() {
@@ -258,6 +315,8 @@ int main() {
     testCancelBeforeInsertion();
     testDestroyWithPendingWork();
     testConstructorClosesFdOnRegistrationFailure();
+    testLoopConstructorClosesFdsOnRegistrationFailure();
+    testEventLoopTimerMethods();
     testUnsuccessfulReadsDoNotDispatch();
     testCallbackExceptionRestoresBatch();
     testCallbackExceptionRearmsFutureTimer();
